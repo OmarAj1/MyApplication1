@@ -1,0 +1,15 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme for night mode. -->
+    <style name="Base.Theme.MyApplication.Night" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Make status bar transparent -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <!-- Make navigation bar transparent -->
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+
+        <!-- Optional: For older APIs -->
+        <item name="android:windowTranslucentStatus">true</item>
+        <item name="android:windowTranslucentNavigation">true</item>
+    </style>
+
+    <style name="Theme.MyApplication.Night" parent="Base.Theme.MyApplication.Night" />
+</resources>
