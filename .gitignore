@@ -13,4 +13,5 @@
 .externalNativeBuild
 .cxx
 local.properties
+node_modules/
 /app/src/main/assets/node_modules/
