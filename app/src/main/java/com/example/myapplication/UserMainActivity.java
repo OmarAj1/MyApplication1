@@ -66,14 +66,12 @@ public class UserMainActivity extends AppCompatActivity {
 
     private WebView webView;
     private ProgressBar loader;
-    // Use CachedThreadPool to prevent thread starvation if multiple commands run
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private ConsolidatedWebAppInterface mInterface;
     private NsdHelper nsdHelper;
 
-    // --- INTERFACE 1: Common Utilities ---
     public class CommonInterface {
         private final AppCompatActivity mActivity;
         private final Context mContext;
@@ -85,7 +83,7 @@ public class UserMainActivity extends AppCompatActivity {
 
         @JavascriptInterface
         public String getNativeCoreVersion() {
-            return "4.1.0-STABLE";
+            return "4.2.0-PERSISTENT";
         }
 
         @JavascriptInterface
@@ -123,7 +121,6 @@ public class UserMainActivity extends AppCompatActivity {
         }
     }
 
-    // --- INTERFACE 2: Shield Utilities ---
     public class ShieldInterface {
         private final CommonInterface mCommon;
 
@@ -154,10 +151,7 @@ public class UserMainActivity extends AppCompatActivity {
         webView = findViewById(R.id.webview);
         loader = findViewById(R.id.loader);
 
-        if (webView == null || loader == null) {
-            Log.e("NEXUS", "Critical: WebView or Loader not found in layout.");
-            return;
-        }
+        if (webView == null || loader == null) return;
 
         webView.setBackgroundColor(0x00000000);
         ViewCompat.setOnApplyWindowInsetsListener(webView, (v, windowInsets) -> {
@@ -183,6 +177,15 @@ public class UserMainActivity extends AppCompatActivity {
                     if (loader != null) loader.setVisibility(View.GONE);
                     view.setAlpha(0f);
                     view.animate().alpha(1.0f).setDuration(500).start();
+
+                    // CRITICAL FIX: Restore state if we are ALREADY connected
+                    // This handles cases where the WebView reloads but the Java process is alive
+                    MyAdbManager manager = AdbSingleton.getInstance().getManager();
+                    if (manager != null && manager.isConnected()) {
+                        Log.d("NEXUS", "Restoring active connection state to UI");
+                        webView.evaluateJavascript("window.adbStatus('Connected');", null);
+                        mInterface.getInstalledPackages(); // Auto-refresh data
+                    }
                 }, 200);
             }
         });
@@ -198,10 +201,22 @@ public class UserMainActivity extends AppCompatActivity {
         webView.loadUrl("file:///android_asset/index.html");
     }
 
+    // --- CRITICAL FIX: RESTART DISCOVERY ON RESUME ---
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (nsdHelper != null) {
+            // Restart scanning when user comes back to the app
+            nsdHelper.startMdnsDiscoveryInternal();
+        }
+    }
+
     @Override
     protected void onPause() {
         super.onPause();
-        if (nsdHelper != null) nsdHelper.stopMdnsDiscoveryInternal();
+        if (nsdHelper != null) {
+            nsdHelper.stopMdnsDiscoveryInternal();
+        }
     }
 
     @Override
@@ -277,32 +292,25 @@ public class UserMainActivity extends AppCompatActivity {
         @NonNull @Override protected Certificate getCertificate() { return mCertificate; }
         @NonNull @Override protected String getDeviceName() { return "NexusUAD"; }
 
-        // --- CRITICAL FIX: TIMEOUT IMPLEMENTATION ---
         public String runShellCommand(String cmd) throws Exception {
             if (!isConnected()) throw new IllegalStateException("ADB Not Connected");
             try (AdbStream stream = openStream("shell:" + cmd)) {
                 ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-                byte[] buffer = new byte[4096];
+                byte[] buffer = new byte[8192];
                 long startTime = System.currentTimeMillis();
-                final long TIMEOUT = 30000; // 30 seconds timeout
+                final long TIMEOUT = 40000;
 
                 while (!stream.isClosed()) {
+                    if (System.currentTimeMillis() - startTime > TIMEOUT) break;
                     try {
-                        // Check for timeout to prevent infinite hanging
-                        if (System.currentTimeMillis() - startTime > TIMEOUT) {
-                            Log.w("NEXUS_ADB", "Command timed out: " + cmd);
-                            break;
-                        }
-
-                        // Use available() to avoid blocking read if possible, or just read
                         int bytesRead = stream.read(buffer, 0, buffer.length);
                         if (bytesRead > 0) {
                             outputStream.write(buffer, 0, bytesRead);
-                            startTime = System.currentTimeMillis(); // Reset timeout on activity
+                            startTime = System.currentTimeMillis();
                         } else if (bytesRead < 0) {
-                            break; // End of stream
+                            break;
                         }
-                        Thread.sleep(10); // Prevent CPU tight loop
+                        Thread.sleep(5);
                     } catch (Exception e) { break; }
                 }
                 return outputStream.toString("UTF-8");
@@ -332,67 +340,72 @@ public class UserMainActivity extends AppCompatActivity {
         public void startMdnsDiscoveryInternal() {
             if (nsdManager == null || isDiscoveryActive) return;
             try {
-                if (pairingListener == null) {
-                    pairingListener = new NsdManager.DiscoveryListener() {
-                        @Override public void onDiscoveryStarted(String t) {}
-                        @Override public void onServiceFound(NsdServiceInfo s) {
-                            if (s.getServiceType().contains("adb-tls-pairing")) {
-                                nsdManager.resolveService(s, new NsdManager.ResolveListener() {
-                                    @Override public void onResolveFailed(NsdServiceInfo s, int e) {}
-                                    @Override public void onServiceResolved(NsdServiceInfo s) {
-                                        autoPairIp = s.getHost().getHostAddress();
-                                        autoPairPort = s.getPort();
-                                        sendToJs("onPairingServiceFound", autoPairIp, autoPairPort);
-                                    }
-                                });
-                            }
-                        }
-                        @Override public void onServiceLost(NsdServiceInfo s) {}
-                        @Override public void onDiscoveryStopped(String t) {}
-                        @Override public void onStartDiscoveryFailed(String t, int e) { stopMdnsDiscoveryInternal(); }
-                        @Override public void onStopDiscoveryFailed(String t, int e) { stopMdnsDiscoveryInternal(); }
-                    };
-                }
-
-                if (connectListener == null) {
-                    connectListener = new NsdManager.DiscoveryListener() {
-                        @Override public void onDiscoveryStarted(String t) {}
-                        @Override public void onServiceFound(NsdServiceInfo s) {
-                            if (s.getServiceType().contains("adb-tls-connect")) {
-                                nsdManager.resolveService(s, new NsdManager.ResolveListener() {
-                                    @Override public void onResolveFailed(NsdServiceInfo s, int e) {}
-                                    @Override public void onServiceResolved(NsdServiceInfo s) {
-                                        autoConnectIp = s.getHost().getHostAddress();
-                                        autoConnectPort = s.getPort();
-                                        sendToJs("onConnectServiceFound", autoConnectIp, autoConnectPort);
-                                    }
-                                });
-                            }
-                        }
-                        @Override public void onServiceLost(NsdServiceInfo s) {}
-                        @Override public void onDiscoveryStopped(String t) {}
-                        @Override public void onStartDiscoveryFailed(String t, int e) { stopMdnsDiscoveryInternal(); }
-                        @Override public void onStopDiscoveryFailed(String t, int e) { stopMdnsDiscoveryInternal(); }
-                    };
-                }
+                if (pairingListener == null) setupPairingListener();
+                if (connectListener == null) setupConnectListener();
 
                 nsdManager.discoverServices("_adb-tls-pairing._tcp.", NsdManager.PROTOCOL_DNS_SD, pairingListener);
                 nsdManager.discoverServices("_adb-tls-connect._tcp.", NsdManager.PROTOCOL_DNS_SD, connectListener);
                 isDiscoveryActive = true;
+                Log.d("NEXUS", "MDNS Discovery Started");
             } catch (Exception e) {
                 Log.e("NEXUS", "MDNS Start Error", e);
                 isDiscoveryActive = false;
             }
         }
 
-        public void stopMdnsDiscoveryInternal() {
-            try {
-                if (nsdManager != null && isDiscoveryActive) {
-                    if (pairingListener != null) nsdManager.stopServiceDiscovery(pairingListener);
-                    if (connectListener != null) nsdManager.stopServiceDiscovery(connectListener);
+        private void setupPairingListener() {
+            pairingListener = new NsdManager.DiscoveryListener() {
+                @Override public void onDiscoveryStarted(String t) {}
+                @Override public void onServiceFound(NsdServiceInfo s) {
+                    if (s.getServiceType().contains("adb-tls-pairing")) {
+                        nsdManager.resolveService(s, new NsdManager.ResolveListener() {
+                            @Override public void onResolveFailed(NsdServiceInfo s, int e) {}
+                            @Override public void onServiceResolved(NsdServiceInfo s) {
+                                autoPairIp = s.getHost().getHostAddress();
+                                autoPairPort = s.getPort();
+                                sendToJs("onPairingServiceFound", autoPairIp, autoPairPort);
+                            }
+                        });
+                    }
                 }
-            } catch (Exception e) { Log.e("NEXUS", "MDNS Stop Error", e); }
-            finally { isDiscoveryActive = false; }
+                @Override public void onServiceLost(NsdServiceInfo s) {}
+                @Override public void onDiscoveryStopped(String t) {}
+                @Override public void onStartDiscoveryFailed(String t, int e) { stopInternal(); }
+                @Override public void onStopDiscoveryFailed(String t, int e) { stopInternal(); }
+            };
+        }
+
+        private void setupConnectListener() {
+            connectListener = new NsdManager.DiscoveryListener() {
+                @Override public void onDiscoveryStarted(String t) {}
+                @Override public void onServiceFound(NsdServiceInfo s) {
+                    if (s.getServiceType().contains("adb-tls-connect")) {
+                        nsdManager.resolveService(s, new NsdManager.ResolveListener() {
+                            @Override public void onResolveFailed(NsdServiceInfo s, int e) {}
+                            @Override public void onServiceResolved(NsdServiceInfo s) {
+                                autoConnectIp = s.getHost().getHostAddress();
+                                autoConnectPort = s.getPort();
+                                sendToJs("onConnectServiceFound", autoConnectIp, autoConnectPort);
+                            }
+                        });
+                    }
+                }
+                @Override public void onServiceLost(NsdServiceInfo s) {}
+                @Override public void onDiscoveryStopped(String t) {}
+                @Override public void onStartDiscoveryFailed(String t, int e) { stopInternal(); }
+                @Override public void onStopDiscoveryFailed(String t, int e) { stopInternal(); }
+            };
+        }
+
+        private void stopInternal() {
+            try { if(pairingListener != null) nsdManager.stopServiceDiscovery(pairingListener); } catch(Exception e){}
+            try { if(connectListener != null) nsdManager.stopServiceDiscovery(connectListener); } catch(Exception e){}
+            isDiscoveryActive = false;
+        }
+
+        public void stopMdnsDiscoveryInternal() {
+            if (!isDiscoveryActive) return;
+            stopInternal();
         }
 
         public void retrieveConnectionInfoInternal() {
@@ -504,7 +517,6 @@ public class UserMainActivity extends AppCompatActivity {
                     if (connected) {
                         common.showToast("Connected to Shell");
                         activity.runOnUiThread(() -> webView.evaluateJavascript("window.adbStatus('Connected');", null));
-                        // REMOVED AUTOMATIC FETCH HERE to avoid race condition with JS side
                     } else {
                         common.showToast("Connection Failed");
                         activity.runOnUiThread(() -> webView.evaluateJavascript("window.adbStatus('Connection Failed');", null));
@@ -541,7 +553,6 @@ public class UserMainActivity extends AppCompatActivity {
             });
         }
 
-        // --- CRITICAL FIX: GUARANTEED CALLBACK ---
         private void fetchRealPackageListInternal() {
             executor.execute(() -> {
                 String base64Data = "";
@@ -551,10 +562,8 @@ public class UserMainActivity extends AppCompatActivity {
                         Log.e("NEXUS", "ADB Disconnected during fetch");
                         base64Data = Base64.encodeToString("[]".getBytes(), Base64.NO_WRAP);
                     } else {
-                        // 1. Try Simple List first (Faster, robust)
                         String rawList = manager.runShellCommand("pm list packages");
 
-                        // 2. Parse basic list
                         if (rawList == null || rawList.isEmpty()) {
                             base64Data = Base64.encodeToString("[]".getBytes(), Base64.NO_WRAP);
                         } else {
@@ -565,7 +574,7 @@ public class UserMainActivity extends AppCompatActivity {
                                 if (!pkg.isEmpty()) {
                                     JSONObject obj = new JSONObject();
                                     obj.put("pkg", pkg);
-                                    obj.put("name", pkg); // Fallback name
+                                    obj.put("name", pkg);
                                     obj.put("type", "User");
                                     obj.put("status", "Unknown");
                                     jsonArray.put(obj);
@@ -579,7 +588,6 @@ public class UserMainActivity extends AppCompatActivity {
                     base64Data = Base64.encodeToString("[]".getBytes(), Base64.NO_WRAP);
                 }
 
-                // ALWAYS execute this to stop the loading spinner
                 final String finalData = base64Data;
                 activity.runOnUiThread(() ->
                         webView.evaluateJavascript("if(window.receiveAppList) window.receiveAppList('" + finalData + "');", null)

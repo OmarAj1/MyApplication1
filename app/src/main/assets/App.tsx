@@ -5,7 +5,6 @@ import {
   Key, ArrowRight, RotateCcw
 } from 'lucide-react';
 
-// --- Native Interfaces ---
 const isNative = () => typeof (window as any).AndroidNative !== 'undefined';
 
 const triggerHaptic = (type: 'light' | 'heavy' | 'success' = 'light') => {
@@ -17,7 +16,6 @@ const showToast = (msg: string) => {
   else console.log(`[Toast] ${msg}`);
 };
 
-// --- Types ---
 interface AppData {
   name: string;
   pkg: string;
@@ -26,7 +24,6 @@ interface AppData {
   iconBase64?: string;
 }
 
-// --- Components ---
 const GlassCard = ({ children, className = "", borderColor = "white" }: any) => {
   const borderColors: any = {
     white: "border-white/[0.05]",
@@ -106,8 +103,6 @@ const TabBar = ({ active, onChange }: any) => (
   </div>
 );
 
-// --- Main Application ---
-
 export default function App() {
   const [activeTab, setActiveTab] = useState('purge');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -131,7 +126,7 @@ export default function App() {
   const [actionType, setActionType] = useState<'uninstall' | 'disable' | 'restore' | 'enable' | null>(null);
   const [isLoadingApps, setIsLoadingApps] = useState(false);
   const [stats, setStats] = useState({ blocked: 124, saved: 4.2 });
-  const [coreVersion, setCoreVersion] = useState("4.0.0-ULTIMATE");
+  const [coreVersion, setCoreVersion] = useState("4.2.0-PERSISTENT");
 
   useEffect(() => {
        (window as any).receiveAppList = (base64Json: string) => {
@@ -146,7 +141,6 @@ export default function App() {
          } catch (e) {
            console.error("Parse error", e);
            showToast("Error parsing apps");
-           // Force transition even on empty to unblock user
            setPurgeTabState('apps');
          }
        };
@@ -210,8 +204,6 @@ export default function App() {
   const openModal = (app: AppData, action: any) => {
     setSelectedApp(app); setActionType(action); setModalOpen(true); triggerHaptic('light');
   };
-
-  // --- Render Functions (Defined BEFORE return statement) ---
 
   const renderLogin = () => (
     <div className="w-full max-w-sm mx-auto flex flex-col justify-center h-screen p-8">
@@ -367,7 +359,6 @@ export default function App() {
     );
   };
 
-  // --- MAIN RENDER LOGIC ---
   if (!isLoggedIn) return <div className="w-full bg-slate-900 text-white min-h-screen">{renderLogin()}</div>;
 
   return (
