@@ -1,3 +1,15 @@
 <resources>
     <string name="app_name">My Application</string>
+    <string name="failed_to_init_adb_manager">Failed to init ADB Manager</string>
+    <string name="nexus_controller">NexusController</string>
+    <string name="initializing_core">Initializing Core...</string>
+    <string name="pairing_success">Pairing Success!</string>
+    <string name="pairing_failed">Pairing Failed</string>
+    <string name="pairing_error">Pairing Error</string>
+    <string name="error_prefix">Error: </string>
+    <string name="connected_to_adb">Connected to ADB!</string>
+    <string name="connection_refused">Connection Refused</string>
+    <string name="connect_error">Connect Error</string>
+    <string name="list_error">List Error</string>
+    <string name="revoked_net">Revoked Net: </string>
 </resources>

@@ -6,7 +6,16 @@ plugins {
 android {
     namespace = "com.example.myapplication"
     compileSdk = 36
+    // Add this inside the 'android' block in app/build.gradle.kts
+        tasks.register("buildReactApp", Exec::class) {
+            workingDir = file("src/main/assets")
+            // Use 'npm.cmd' on Windows, 'npm' on Mac/Linux
+            commandLine(if (System.getProperty("os.name").toLowerCase().contains("windows")) "npm.cmd" else "npm", "run", "build")
+        }
 
+        tasks.named("preBuild") {
+            dependsOn("buildReactApp")
+        }
     defaultConfig {
         applicationId = "com.example.myapplication"
         minSdk = 26
