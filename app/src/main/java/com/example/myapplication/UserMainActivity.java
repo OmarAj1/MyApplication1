@@ -1,11 +1,4 @@
 package com.example.myapplication;
-import android.util.Base64;
-
-import androidx.annotation.NonNull;
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
-import androidx.core.view.WindowInsetsCompat;
 
 import android.annotation.SuppressLint;
 import android.content.ClipboardManager;
@@ -13,15 +6,13 @@ import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
-import android.graphics.Bitmap;
-import android.graphics.drawable.BitmapDrawable;
-import android.graphics.drawable.Drawable;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Base64;
 import android.util.Log;
 import android.view.View;
 import android.webkit.ConsoleMessage;
@@ -33,11 +24,14 @@ import android.webkit.WebViewClient;
 import android.widget.ProgressBar;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 
-
-// or use android.util.Base64 fully qualified in the code as shown above
-import org.json.JSONArray;
-import org.json.JSONObject;
+import com.example.myapplication.interfaces.CommonInterface;
+import com.example.myapplication.interfaces.ShieldInterface;
 
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.cert.X509CertificateHolder;
@@ -46,6 +40,8 @@ import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
@@ -64,10 +60,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import io.github.muntashirakon.adb.AbsAdbConnectionManager;
 import io.github.muntashirakon.adb.AdbStream;
 
-// Note: PurgeInterface import is REMOVED intentionally.
-import com.example.myapplication.interfaces.CommonInterface;
-import com.example.myapplication.interfaces.ShieldInterface;
-
 public class UserMainActivity extends AppCompatActivity {
 
     private WebView webView;
@@ -75,7 +67,6 @@ public class UserMainActivity extends AppCompatActivity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
-    // Instance field (NOT static) prevents memory leaks
     private ConsolidatedWebAppInterface mInterface;
     private NsdHelper nsdHelper;
 
@@ -122,7 +113,7 @@ public class UserMainActivity extends AppCompatActivity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 mainHandler.postDelayed(() -> {
-                    loader.setVisibility(View.GONE);
+                    if (loader != null) loader.setVisibility(View.GONE);
                     view.setAlpha(0f);
                     view.animate().alpha(1.0f).setDuration(500).start();
                 }, 200);
@@ -153,7 +144,7 @@ public class UserMainActivity extends AppCompatActivity {
         if (nsdHelper != null) nsdHelper.stopMdnsDiscoveryInternal();
     }
 
-    // --- SINGLETON TO HOLD ADB STATE (Fixes rotation/activity recreation issues) ---
+    // --- SINGLETON TO HOLD ADB STATE ---
     public static class AdbSingleton {
         private static AdbSingleton instance;
         private MyAdbManager adbManager;
@@ -185,9 +176,6 @@ public class UserMainActivity extends AppCompatActivity {
     }
 
     // --- ADB MANAGER IMPLEMENTATION ---
-    // ... existing imports ...
-
-    // REPLACE THE ENTIRE MyAdbManager CLASS WITH THIS:
     public static class MyAdbManager extends AbsAdbConnectionManager {
         private PrivateKey mPrivateKey;
         private Certificate mCertificate;
@@ -198,7 +186,6 @@ public class UserMainActivity extends AppCompatActivity {
         }
 
         private void generateKeys() throws Exception {
-            // 1. Generate Standard RSA Keys using Android's Native Provider first
             KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
             keyGen.initialize(2048, new SecureRandom());
             KeyPair pair = keyGen.generateKeyPair();
@@ -206,25 +193,22 @@ public class UserMainActivity extends AppCompatActivity {
             mPrivateKey = pair.getPrivate();
             PublicKey publicKey = pair.getPublic();
 
-            // 2. Create Self-Signed Certificate for TLS Pairing (Android 11+)
             X500Name issuer = new X500Name("CN=NexusADB");
-            BigInteger serial = BigInteger.valueOf(Math.abs(System.currentTimeMillis())); // Ensure positive serial
-            Date notBefore = new Date(System.currentTimeMillis() - 1000L * 60 * 60 * 24); // Yesterday
-            Date notAfter = new Date(System.currentTimeMillis() + 1000L * 3600 * 24 * 365 * 10); // 10 Years
+            BigInteger serial = BigInteger.valueOf(Math.abs(System.currentTimeMillis()));
+            Date notBefore = new Date(System.currentTimeMillis() - 1000L * 60 * 60 * 24);
+            Date notAfter = new Date(System.currentTimeMillis() + 1000L * 3600 * 24 * 365 * 10);
             X500Name subject = new X500Name("CN=NexusADB");
 
             JcaX509v3CertificateBuilder certBuilder = new JcaX509v3CertificateBuilder(
                     issuer, serial, notBefore, notAfter, subject, publicKey
             );
 
-            // Use Bouncy Castle only for the signature
             ContentSigner signer = new JcaContentSignerBuilder("SHA256WithRSA")
-                    .setProvider(new BouncyCastleProvider()) // Explicit instance
+                    .setProvider(new BouncyCastleProvider())
                     .build(mPrivateKey);
 
             X509CertificateHolder certHolder = certBuilder.build(signer);
 
-            // Convert back to Java Certificate
             mCertificate = new JcaX509CertificateConverter()
                     .setProvider(new BouncyCastleProvider())
                     .getCertificate(certHolder);
@@ -236,7 +220,6 @@ public class UserMainActivity extends AppCompatActivity {
 
         public String runShellCommand(String cmd) throws Exception {
             if (!isConnected()) throw new IllegalStateException("ADB Not Connected");
-            // Standard stream handling...
             try (AdbStream stream = openStream("shell:" + cmd)) {
                 ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
                 byte[] buffer = new byte[4096];
@@ -252,13 +235,16 @@ public class UserMainActivity extends AppCompatActivity {
         }
     }
 
-    // --- NSD HELPER ---
+    // --- NSD HELPER (Fixed: Crash Prevention & Compilation) ---
     private class NsdHelper {
         private NsdManager nsdManager;
         private NsdManager.DiscoveryListener pairingListener, connectListener;
         private String autoPairIp, autoConnectIp;
         private int autoPairPort = -1, autoConnectPort = -1;
         private final AppCompatActivity activity;
+
+        // Prevents "Listener already registered" crash
+        private boolean isDiscoveryActive = false;
 
         NsdHelper(AppCompatActivity activity) {
             this.activity = activity;
@@ -272,12 +258,17 @@ public class UserMainActivity extends AppCompatActivity {
         }
 
         public void startMdnsDiscoveryInternal() {
-            try {
-                if (nsdManager == null) return;
+            if (nsdManager == null) return;
 
+            if (isDiscoveryActive) {
+                Log.d("NEXUS", "Discovery already active, skipping start.");
+                return;
+            }
+
+            try {
                 if (pairingListener == null) {
                     pairingListener = new NsdManager.DiscoveryListener() {
-                        @Override public void onDiscoveryStarted(String t) {}
+                        @Override public void onDiscoveryStarted(String t) { Log.d("NEXUS", "Pairing Discovery Started"); }
                         @Override public void onServiceFound(NsdServiceInfo s) {
                             if (s.getServiceType().contains("adb-tls-pairing")) {
                                 nsdManager.resolveService(s, new NsdManager.ResolveListener() {
@@ -292,8 +283,13 @@ public class UserMainActivity extends AppCompatActivity {
                         }
                         @Override public void onServiceLost(NsdServiceInfo s) {}
                         @Override public void onDiscoveryStopped(String t) {}
-                        @Override public void onStartDiscoveryFailed(String t, int e) {}
-                        @Override public void onStopDiscoveryFailed(String t, int e) {}
+                        @Override public void onStartDiscoveryFailed(String t, int e) {
+                            Log.e("NEXUS", "Pairing Start Failed: " + e);
+                            nsdManager.stopServiceDiscovery(this);
+                        }
+                        @Override public void onStopDiscoveryFailed(String t, int e) {
+                            nsdManager.stopServiceDiscovery(this);
+                        }
                     };
                 }
 
@@ -314,32 +310,40 @@ public class UserMainActivity extends AppCompatActivity {
                         }
                         @Override public void onServiceLost(NsdServiceInfo s) {}
                         @Override public void onDiscoveryStopped(String t) {}
-                        @Override public void onStartDiscoveryFailed(String t, int e) {}
-                        @Override public void onStopDiscoveryFailed(String t, int e) {}
+                        @Override public void onStartDiscoveryFailed(String t, int e) { nsdManager.stopServiceDiscovery(this); }
+                        @Override public void onStopDiscoveryFailed(String t, int e) { nsdManager.stopServiceDiscovery(this); }
                     };
                 }
 
                 nsdManager.discoverServices("_adb-tls-pairing._tcp.", NsdManager.PROTOCOL_DNS_SD, pairingListener);
                 nsdManager.discoverServices("_adb-tls-connect._tcp.", NsdManager.PROTOCOL_DNS_SD, connectListener);
+                isDiscoveryActive = true;
 
-            } catch (Exception e) { Log.e("NEXUS", "MDNS Start Error", e); }
+            } catch (Exception e) {
+                Log.e("NEXUS", "MDNS Start Error", e);
+                isDiscoveryActive = false;
+            }
         }
 
         public void stopMdnsDiscoveryInternal() {
             try {
-                if (nsdManager != null) {
+                if (nsdManager != null && isDiscoveryActive) {
                     if (pairingListener != null) nsdManager.stopServiceDiscovery(pairingListener);
                     if (connectListener != null) nsdManager.stopServiceDiscovery(connectListener);
                 }
-            } catch (Exception e) {}
+            } catch (Exception e) {
+                Log.e("NEXUS", "MDNS Stop Error", e);
+            } finally {
+                isDiscoveryActive = false;
+            }
         }
 
         public void retrieveConnectionInfoInternal() {
-            // Check cache
+            // 1. Send cached NSD info
             if (autoPairIp != null && autoPairPort != -1) sendToJs("onPairingServiceFound", autoPairIp, autoPairPort);
             if (autoConnectIp != null && autoConnectPort != -1) sendToJs("onConnectServiceFound", autoConnectIp, autoConnectPort);
 
-            // Check clipboard
+            // 2. Check Clipboard for "IP:PORT" string
             activity.runOnUiThread(() -> {
                 try {
                     ClipboardManager cb = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
@@ -348,7 +352,12 @@ public class UserMainActivity extends AppCompatActivity {
                         if (text != null) {
                             java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d{1,3}(?:\\.\\d{1,3}){3}):(\\d{4,5})").matcher(text);
                             if (m.find()) {
-                                sendToJs("onPairingServiceFound", m.group(1), Integer.parseInt(m.group(2)));
+                                String ip = m.group(1);
+                                int port = Integer.parseInt(m.group(2));
+                                sendToJs("onPairingServiceFound", ip, port);
+
+                                // FIX: Use Toast directly
+                                Toast.makeText(activity, "Pasted from Clipboard: " + ip, Toast.LENGTH_SHORT).show();
                             }
                         }
                     }
@@ -362,26 +371,24 @@ public class UserMainActivity extends AppCompatActivity {
         public int getAutoConnectPort() { return autoConnectPort; }
     }
 
-    // --- CONSOLIDATED INTERFACE (Lifecycle Aware) ---
-// --- CONSOLIDATED INTERFACE (Lifecycle Aware) ---
+    // --- CONSOLIDATED INTERFACE ---
     public class ConsolidatedWebAppInterface {
         public final CommonInterface common;
         private final ShieldInterface shield;
         private final AppCompatActivity activity;
         private final ExecutorService executor;
         private final NsdHelper nsdHelper;
-        private final WebView webView; // Added reference to webView
+        private final WebView webView;
 
         ConsolidatedWebAppInterface(AppCompatActivity activity, ExecutorService executor, WebView webView, NsdHelper nsdHelper) {
             this.activity = activity;
             this.executor = executor;
-            this.webView = webView; // Initialize webView
+            this.webView = webView;
             this.nsdHelper = nsdHelper;
             this.common = new CommonInterface(activity);
             this.shield = new ShieldInterface(activity, common);
         }
 
-        // --- PROXIES (Exposed to JS) ---
         @JavascriptInterface public String getNativeCoreVersion() { return common.getNativeCoreVersion(); }
         @JavascriptInterface public void hapticFeedback(String type) { common.hapticFeedback(type); }
         @JavascriptInterface public void showToast(String toast) { common.showToast(toast); }
@@ -397,7 +404,6 @@ public class UserMainActivity extends AppCompatActivity {
         @JavascriptInterface public void startVpn() { shield.startVpn(); }
         @JavascriptInterface public void stopVpn() { shield.stopVpn(); }
 
-        // --- CORE LOGIC ---
         private void pairAdbInternal(String ip, String portStr, String code) {
             executor.execute(() -> {
                 MyAdbManager manager = AdbSingleton.getInstance().getManager();
@@ -481,7 +487,7 @@ public class UserMainActivity extends AppCompatActivity {
                     if (!cmd.isEmpty()) {
                         manager.runShellCommand(cmd);
                         common.showToast("Executed: " + action);
-                        fetchRealPackageListInternal(); // Refresh list after action
+                        fetchRealPackageListInternal();
                     }
                 } catch(Exception e) {
                     common.showToast("Cmd Failed: " + e.getMessage());
@@ -489,22 +495,17 @@ public class UserMainActivity extends AppCompatActivity {
             });
         }
 
-        // RENAMED to match the call in getInstalledPackages()
         private void fetchRealPackageListInternal() {
             executor.execute(() -> {
                 try {
-                    // FIX 1: Use AdbSingleton instead of UserMainActivity.adbManager
                     MyAdbManager manager = AdbSingleton.getInstance().getManager();
                     if (manager == null) return;
 
                     String rawList = manager.runShellCommand("pm list packages -f -u");
-
                     if (rawList == null || rawList.isEmpty()) return;
 
                     String[] lines = rawList.split("\n");
                     JSONArray jsonArray = new JSONArray();
-
-                    // FIX 2: Use 'activity' instead of 'mContext'
                     PackageManager pm = activity.getPackageManager();
 
                     for (String line : lines) {
@@ -518,10 +519,8 @@ public class UserMainActivity extends AppCompatActivity {
                             PackageInfo pInfo = pm.getPackageInfo(pkgName, PackageManager.MATCH_UNINSTALLED_PACKAGES);
                             boolean isSystem = (pInfo.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
                             boolean isEnabled = pInfo.applicationInfo.enabled;
-
                             CharSequence label = pInfo.applicationInfo.loadLabel(pm);
                             obj.put("name", label != null ? label.toString() : pkgName);
-
                             obj.put("type", isSystem ? "System" : "User");
                             obj.put("status", isEnabled ? "Enabled" : "Disabled");
                         } catch (PackageManager.NameNotFoundException e) {
@@ -532,11 +531,9 @@ public class UserMainActivity extends AppCompatActivity {
                         jsonArray.put(obj);
                     }
 
-                    // Base64 Encode
                     String jsonStr = jsonArray.toString();
                     final String base64Data = Base64.encodeToString(jsonStr.getBytes("UTF-8"), Base64.NO_WRAP);
 
-                    // FIX 3: Use activity.runOnUiThread to update UI
                     activity.runOnUiThread(() ->
                             webView.evaluateJavascript("window.receiveAppList('" + base64Data + "');", null)
                     );
@@ -547,4 +544,5 @@ public class UserMainActivity extends AppCompatActivity {
                 }
             });
         }
-    }}
+    }
+}
