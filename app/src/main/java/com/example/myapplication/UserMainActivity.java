@@ -7,6 +7,10 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
 import android.os.Build;
@@ -53,6 +57,7 @@ import java.security.SecureRandom;
 import java.security.Security;
 import java.security.cert.Certificate;
 import java.util.Date;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -81,10 +86,7 @@ public class UserMainActivity extends AppCompatActivity {
             this.mContext = activity.getApplicationContext();
         }
 
-        @JavascriptInterface
-        public String getNativeCoreVersion() {
-            return "4.2.0-PERSISTENT";
-        }
+        @JavascriptInterface public String getNativeCoreVersion() { return "5.1.2-STABLE"; }
 
         @JavascriptInterface
         public void hapticFeedback(String type) {
@@ -101,9 +103,7 @@ public class UserMainActivity extends AppCompatActivity {
         @JavascriptInterface
         public void showToast(String toast) {
             if (mActivity != null && !mActivity.isFinishing()) {
-                mActivity.runOnUiThread(() ->
-                        Toast.makeText(mContext, toast, Toast.LENGTH_SHORT).show()
-                );
+                mActivity.runOnUiThread(() -> Toast.makeText(mContext, toast, Toast.LENGTH_SHORT).show());
             }
         }
 
@@ -123,22 +123,9 @@ public class UserMainActivity extends AppCompatActivity {
 
     public class ShieldInterface {
         private final CommonInterface mCommon;
-
-        public ShieldInterface(AppCompatActivity activity, CommonInterface common) {
-            this.mCommon = common;
-        }
-
-        @JavascriptInterface
-        public void startVpn() {
-            Log.i("NEXUS_SHIELD", "Attempting to start VPN service...");
-            mCommon.showToast("Shield Activated");
-        }
-
-        @JavascriptInterface
-        public void stopVpn() {
-            Log.i("NEXUS_SHIELD", "Attempting to stop VPN service...");
-            mCommon.showToast("Shield Deactivated");
-        }
+        public ShieldInterface(AppCompatActivity activity, CommonInterface common) { this.mCommon = common; }
+        @JavascriptInterface public void startVpn() { mCommon.showToast("Shield Activated"); }
+        @JavascriptInterface public void stopVpn() { mCommon.showToast("Shield Deactivated"); }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -178,13 +165,10 @@ public class UserMainActivity extends AppCompatActivity {
                     view.setAlpha(0f);
                     view.animate().alpha(1.0f).setDuration(500).start();
 
-                    // CRITICAL FIX: Restore state if we are ALREADY connected
-                    // This handles cases where the WebView reloads but the Java process is alive
                     MyAdbManager manager = AdbSingleton.getInstance().getManager();
                     if (manager != null && manager.isConnected()) {
-                        Log.d("NEXUS", "Restoring active connection state to UI");
                         webView.evaluateJavascript("window.adbStatus('Connected');", null);
-                        mInterface.getInstalledPackages(); // Auto-refresh data
+                        mInterface.getInstalledPackages();
                     }
                 }, 200);
             }
@@ -201,22 +185,16 @@ public class UserMainActivity extends AppCompatActivity {
         webView.loadUrl("file:///android_asset/index.html");
     }
 
-    // --- CRITICAL FIX: RESTART DISCOVERY ON RESUME ---
     @Override
     protected void onResume() {
         super.onResume();
-        if (nsdHelper != null) {
-            // Restart scanning when user comes back to the app
-            nsdHelper.startMdnsDiscoveryInternal();
-        }
+        if (nsdHelper != null) nsdHelper.startMdnsDiscoveryInternal();
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        if (nsdHelper != null) {
-            nsdHelper.stopMdnsDiscoveryInternal();
-        }
+        if (nsdHelper != null) nsdHelper.stopMdnsDiscoveryInternal();
     }
 
     @Override
@@ -244,9 +222,8 @@ public class UserMainActivity extends AppCompatActivity {
                     Security.removeProvider("BC");
                     Security.addProvider(new BouncyCastleProvider());
                     adbManager = new MyAdbManager();
-                    Log.d("NEXUS", "ADB Core Initialized Successfully");
                 } catch (Exception e) {
-                    Log.e("NEXUS", "Failed to init ADB Manager", e);
+                    Log.e("NEXUS", "Failed to init ADB", e);
                 } finally {
                     isInitializing.set(false);
                 }
@@ -271,21 +248,15 @@ public class UserMainActivity extends AppCompatActivity {
             KeyPair pair = keyGen.generateKeyPair();
             mPrivateKey = pair.getPrivate();
             PublicKey publicKey = pair.getPublic();
-
             X500Name issuer = new X500Name("CN=NexusADB");
-            BigInteger serial = BigInteger.valueOf(Math.abs(System.currentTimeMillis()));
-            Date notBefore = new Date(System.currentTimeMillis() - 1000L * 60 * 60 * 24);
-            Date notAfter = new Date(System.currentTimeMillis() + 1000L * 3600 * 24 * 365 * 10);
-            X500Name subject = new X500Name("CN=NexusADB");
-
             JcaX509v3CertificateBuilder certBuilder = new JcaX509v3CertificateBuilder(
-                    issuer, serial, notBefore, notAfter, subject, publicKey
+                    issuer, BigInteger.valueOf(Math.abs(System.currentTimeMillis())),
+                    new Date(System.currentTimeMillis() - 1000L * 60 * 60 * 24),
+                    new Date(System.currentTimeMillis() + 1000L * 3600 * 24 * 365 * 10),
+                    new X500Name("CN=NexusADB"), publicKey
             );
-            ContentSigner signer = new JcaContentSignerBuilder("SHA256WithRSA")
-                    .setProvider(new BouncyCastleProvider()).build(mPrivateKey);
-            X509CertificateHolder certHolder = certBuilder.build(signer);
-            mCertificate = new JcaX509CertificateConverter()
-                    .setProvider(new BouncyCastleProvider()).getCertificate(certHolder);
+            ContentSigner signer = new JcaContentSignerBuilder("SHA256WithRSA").setProvider(new BouncyCastleProvider()).build(mPrivateKey);
+            mCertificate = new JcaX509CertificateConverter().setProvider(new BouncyCastleProvider()).getCertificate(certBuilder.build(signer));
         }
 
         @NonNull @Override protected PrivateKey getPrivateKey() { return mPrivateKey; }
@@ -340,20 +311,14 @@ public class UserMainActivity extends AppCompatActivity {
         public void startMdnsDiscoveryInternal() {
             if (nsdManager == null || isDiscoveryActive) return;
             try {
-                if (pairingListener == null) setupPairingListener();
-                if (connectListener == null) setupConnectListener();
-
+                if (pairingListener == null) setupListeners();
                 nsdManager.discoverServices("_adb-tls-pairing._tcp.", NsdManager.PROTOCOL_DNS_SD, pairingListener);
                 nsdManager.discoverServices("_adb-tls-connect._tcp.", NsdManager.PROTOCOL_DNS_SD, connectListener);
                 isDiscoveryActive = true;
-                Log.d("NEXUS", "MDNS Discovery Started");
-            } catch (Exception e) {
-                Log.e("NEXUS", "MDNS Start Error", e);
-                isDiscoveryActive = false;
-            }
+            } catch (Exception e) { isDiscoveryActive = false; }
         }
 
-        private void setupPairingListener() {
+        private void setupListeners() {
             pairingListener = new NsdManager.DiscoveryListener() {
                 @Override public void onDiscoveryStarted(String t) {}
                 @Override public void onServiceFound(NsdServiceInfo s) {
@@ -370,12 +335,10 @@ public class UserMainActivity extends AppCompatActivity {
                 }
                 @Override public void onServiceLost(NsdServiceInfo s) {}
                 @Override public void onDiscoveryStopped(String t) {}
-                @Override public void onStartDiscoveryFailed(String t, int e) { stopInternal(); }
-                @Override public void onStopDiscoveryFailed(String t, int e) { stopInternal(); }
+                @Override public void onStartDiscoveryFailed(String t, int e) { stopMdnsDiscoveryInternal(); }
+                @Override public void onStopDiscoveryFailed(String t, int e) { stopMdnsDiscoveryInternal(); }
             };
-        }
 
-        private void setupConnectListener() {
             connectListener = new NsdManager.DiscoveryListener() {
                 @Override public void onDiscoveryStarted(String t) {}
                 @Override public void onServiceFound(NsdServiceInfo s) {
@@ -392,40 +355,33 @@ public class UserMainActivity extends AppCompatActivity {
                 }
                 @Override public void onServiceLost(NsdServiceInfo s) {}
                 @Override public void onDiscoveryStopped(String t) {}
-                @Override public void onStartDiscoveryFailed(String t, int e) { stopInternal(); }
-                @Override public void onStopDiscoveryFailed(String t, int e) { stopInternal(); }
+                @Override public void onStartDiscoveryFailed(String t, int e) { stopMdnsDiscoveryInternal(); }
+                @Override public void onStopDiscoveryFailed(String t, int e) { stopMdnsDiscoveryInternal(); }
             };
         }
 
-        private void stopInternal() {
-            try { if(pairingListener != null) nsdManager.stopServiceDiscovery(pairingListener); } catch(Exception e){}
-            try { if(connectListener != null) nsdManager.stopServiceDiscovery(connectListener); } catch(Exception e){}
-            isDiscoveryActive = false;
-        }
-
         public void stopMdnsDiscoveryInternal() {
-            if (!isDiscoveryActive) return;
-            stopInternal();
+            try {
+                if (nsdManager != null && isDiscoveryActive) {
+                    if (pairingListener != null) nsdManager.stopServiceDiscovery(pairingListener);
+                    if (connectListener != null) nsdManager.stopServiceDiscovery(connectListener);
+                }
+            } catch (Exception e) {}
+            finally { isDiscoveryActive = false; }
         }
 
         public void retrieveConnectionInfoInternal() {
-            if (autoPairIp != null && autoPairPort != -1) sendToJs("onPairingServiceFound", autoPairIp, autoPairPort);
-            if (autoConnectIp != null && autoConnectPort != -1) sendToJs("onConnectServiceFound", autoConnectIp, autoConnectPort);
-
+            if (autoPairIp != null) sendToJs("onPairingServiceFound", autoPairIp, autoPairPort);
+            if (autoConnectIp != null) sendToJs("onConnectServiceFound", autoConnectIp, autoConnectPort);
             activity.runOnUiThread(() -> {
                 try {
                     ClipboardManager cb = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
                     if (cb != null && cb.hasPrimaryClip() && cb.getPrimaryClip().getItemCount() > 0) {
                         CharSequence text = cb.getPrimaryClip().getItemAt(0).getText();
-                        if (text != null) {
-                            Matcher m = Pattern.compile("(\\d{1,3}(?:\\.\\d{1,3}){3}):(\\d{4,5})").matcher(text);
-                            if (m.find()) {
-                                sendToJs("onPairingServiceFound", m.group(1), Integer.parseInt(m.group(2)));
-                                Toast.makeText(activity, "Pasted: " + m.group(1), Toast.LENGTH_SHORT).show();
-                            }
-                        }
+                        Matcher m = Pattern.compile("(\\d{1,3}(?:\\.\\d{1,3}){3}):(\\d{4,5})").matcher(text);
+                        if (m.find()) sendToJs("onPairingServiceFound", m.group(1), Integer.parseInt(m.group(2)));
                     }
-                } catch (Exception e) { Log.e("NEXUS", "Clipboard Error", e); }
+                } catch (Exception e) {}
             });
         }
 
@@ -456,11 +412,11 @@ public class UserMainActivity extends AppCompatActivity {
         @JavascriptInterface public void hapticFeedback(String type) { common.hapticFeedback(type); }
         @JavascriptInterface public void showToast(String toast) { common.showToast(toast); }
         @JavascriptInterface public void shareText(String t, String c) { common.shareText(t, c); }
-
         @JavascriptInterface public void pairAdb(String ip, String p, String c) { pairAdbInternal(ip, p, c); }
         @JavascriptInterface public boolean connectAdb(String ip, String p) { connectAdbInternal(ip, p); return true; }
-        @JavascriptInterface public void executeCommand(String a, String p) { executeCommandInternal(a, p); }
+        @JavascriptInterface public void executeCommand(String a, String p, int userId) { executeCommandInternal(a, p, userId); }
         @JavascriptInterface public void getInstalledPackages() { fetchRealPackageListInternal(); }
+        @JavascriptInterface public void getUsers() { fetchUsersInternal(); }
         @JavascriptInterface public void startMdnsDiscovery() { nsdHelper.startMdnsDiscoveryInternal(); }
         @JavascriptInterface public void stopMdnsDiscovery() { nsdHelper.stopMdnsDiscoveryInternal(); }
         @JavascriptInterface public void retrieveConnectionInfo() { nsdHelper.retrieveConnectionInfoInternal(); }
@@ -470,24 +426,15 @@ public class UserMainActivity extends AppCompatActivity {
         private void pairAdbInternal(String ip, String portStr, String code) {
             executor.execute(() -> {
                 MyAdbManager manager = AdbSingleton.getInstance().getManager();
-                if (manager == null) {
-                    common.showToast("Core initializing...");
-                    return;
-                }
+                if (manager == null) { common.showToast("Core initializing..."); return; }
                 try {
                     String targetIp = (ip != null && !ip.isEmpty()) ? ip : nsdHelper.getAutoPairIp();
                     int targetPort = -1;
                     try { targetPort = Integer.parseInt(portStr); } catch (Exception e) { targetPort = nsdHelper.getAutoPairPort(); }
-
-                    if (targetIp == null || targetPort == -1) {
-                        common.showToast("Missing Pairing Info");
-                        return;
-                    }
+                    if (targetIp == null || targetPort == -1) { common.showToast("Missing Pairing Info"); return; }
                     boolean success = manager.pair(targetIp, targetPort, code);
                     common.showToast(success ? "Pairing Success!" : "Pairing Failed. Check Code.");
-                } catch (Exception e) {
-                    common.showToast("Pair Error: " + e.getMessage());
-                }
+                } catch (Exception e) { common.showToast("Pair Error: " + e.getMessage()); }
             });
         }
 
@@ -495,23 +442,14 @@ public class UserMainActivity extends AppCompatActivity {
             executor.execute(() -> {
                 MyAdbManager manager = AdbSingleton.getInstance().getManager();
                 if (manager == null) return;
-
                 try {
                     String targetIp = (ip != null && !ip.isEmpty()) ? ip : nsdHelper.getAutoConnectIp();
                     if (targetIp == null) targetIp = nsdHelper.getAutoPairIp();
-
                     int targetPort = -1;
-                    if (portStr != null && !portStr.isEmpty()) {
-                        try { targetPort = Integer.parseInt(portStr); } catch (Exception e){}
-                    } else {
-                        targetPort = nsdHelper.getAutoConnectPort();
-                        if (targetPort == -1) targetPort = nsdHelper.getAutoPairPort();
-                    }
+                    try { targetPort = Integer.parseInt(portStr); } catch (Exception e) { targetPort = nsdHelper.getAutoConnectPort(); }
+                    if (targetPort == -1) targetPort = nsdHelper.getAutoPairPort();
 
-                    if (targetIp == null || targetPort == -1) {
-                        common.showToast("Connection Info Missing");
-                        return;
-                    }
+                    if (targetIp == null || targetPort == -1) { common.showToast("Connection Info Missing"); return; }
 
                     boolean connected = manager.connect(targetIp, targetPort);
                     if (connected) {
@@ -528,65 +466,94 @@ public class UserMainActivity extends AppCompatActivity {
             });
         }
 
-        private void executeCommandInternal(String action, String pkg) {
+        private void executeCommandInternal(String action, String pkg, int userId) {
             executor.execute(() -> {
                 MyAdbManager manager = AdbSingleton.getInstance().getManager();
-                if (manager == null || !manager.isConnected()) {
-                    common.showToast("Not Connected");
-                    return;
-                }
+                if (manager == null || !manager.isConnected()) { common.showToast("Not Connected"); return; }
                 try {
                     String cmd = "";
-                    if ("uninstall".equals(action)) cmd = "pm uninstall --user 0 " + pkg;
-                    else if ("disable".equals(action)) cmd = "pm disable-user --user 0 " + pkg;
-                    else if ("enable".equals(action)) cmd = "pm enable " + pkg;
-                    else if ("restore".equals(action)) cmd = "cmd package install-existing " + pkg;
+                    if ("uninstall".equals(action)) cmd = "pm uninstall --user " + userId + " " + pkg;
+                    else if ("disable".equals(action)) cmd = "pm disable-user --user " + userId + " " + pkg;
+                    else if ("enable".equals(action)) cmd = "pm enable --user " + userId + " " + pkg;
+                    else if ("restore".equals(action)) cmd = "cmd package install-existing --user " + userId + " " + pkg;
 
                     if (!cmd.isEmpty()) {
                         manager.runShellCommand(cmd);
-                        common.showToast("Executed: " + action);
+                        common.showToast("Executed: " + action + " (User " + userId + ")");
                         fetchRealPackageListInternal();
                     }
-                } catch(Exception e) {
-                    common.showToast("Cmd Failed: " + e.getMessage());
-                }
+                } catch(Exception e) { common.showToast("Cmd Failed: " + e.getMessage()); }
+            });
+        }
+
+        private void fetchUsersInternal() {
+            executor.execute(() -> {
+                try {
+                    MyAdbManager manager = AdbSingleton.getInstance().getManager();
+                    if (manager != null && manager.isConnected()) {
+                        String raw = manager.runShellCommand("pm list users");
+                        String b64 = Base64.encodeToString(raw.getBytes(), Base64.NO_WRAP);
+                        activity.runOnUiThread(() -> webView.evaluateJavascript("if(window.receiveUsers) window.receiveUsers('" + b64 + "');", null));
+                    }
+                } catch (Exception e) { Log.e("NEXUS", "User Fetch Error", e); }
             });
         }
 
         private void fetchRealPackageListInternal() {
             executor.execute(() -> {
-                String base64Data = "";
+                String base64Data = Base64.encodeToString("[]".getBytes(), Base64.NO_WRAP);
                 try {
-                    MyAdbManager manager = AdbSingleton.getInstance().getManager();
-                    if (manager == null || !manager.isConnected()) {
-                        Log.e("NEXUS", "ADB Disconnected during fetch");
-                        base64Data = Base64.encodeToString("[]".getBytes(), Base64.NO_WRAP);
-                    } else {
-                        String rawList = manager.runShellCommand("pm list packages");
+                    PackageManager pm = activity.getPackageManager();
+                    // Fetch ALL installed packages (System + User) for the device
+                    List<PackageInfo> packages = pm.getInstalledPackages(PackageManager.MATCH_UNINSTALLED_PACKAGES);
 
-                        if (rawList == null || rawList.isEmpty()) {
-                            base64Data = Base64.encodeToString("[]".getBytes(), Base64.NO_WRAP);
-                        } else {
-                            String[] lines = rawList.split("\n");
-                            JSONArray jsonArray = new JSONArray();
-                            for (String line : lines) {
-                                String pkg = line.replace("package:", "").trim();
-                                if (!pkg.isEmpty()) {
-                                    JSONObject obj = new JSONObject();
-                                    obj.put("pkg", pkg);
-                                    obj.put("name", pkg);
-                                    obj.put("type", "User");
-                                    obj.put("status", "Unknown");
-                                    jsonArray.put(obj);
+                    JSONArray jsonArray = new JSONArray();
+                    for (PackageInfo pInfo : packages) {
+                        JSONObject obj = new JSONObject();
+                        String pkgName = pInfo.packageName;
+                        obj.put("pkg", pkgName);
+
+                        // --- CATEGORIZATION LOGIC ---
+                        boolean isSystem = (pInfo.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
+                        obj.put("type", isSystem ? "System" : "User");
+
+                        // --- STATUS LOGIC ---
+                        boolean isEnabled = pInfo.applicationInfo.enabled;
+                        boolean isInstalled = (pInfo.applicationInfo.flags & ApplicationInfo.FLAG_INSTALLED) != 0;
+
+                        if (!isInstalled) obj.put("status", "Uninstalled"); // Was uninstalled via pm uninstall -k
+                        else if (isEnabled) obj.put("status", "Enabled");
+                        else obj.put("status", "Disabled");
+
+                        CharSequence label = pInfo.applicationInfo.loadLabel(pm);
+                        obj.put("name", label != null ? label.toString() : pkgName);
+
+                        // --- ICON EXTRACTION (For user apps only to save memory, or all if requested) ---
+                        // Only fetch icons for User apps to keep JSON size manageable, or system if crucial
+                        if (!isSystem) {
+                            try {
+                                Drawable icon = pInfo.applicationInfo.loadIcon(pm);
+                                Bitmap bitmap;
+                                if (icon instanceof BitmapDrawable) {
+                                    bitmap = ((BitmapDrawable) icon).getBitmap();
+                                } else {
+                                    bitmap = Bitmap.createBitmap(icon.getIntrinsicWidth(), icon.getIntrinsicHeight(), Bitmap.Config.ARGB_8888);
+                                    Canvas canvas = new Canvas(bitmap);
+                                    icon.setBounds(0, 0, canvas.getWidth(), canvas.getHeight());
+                                    icon.draw(canvas);
                                 }
-                            }
-                            base64Data = Base64.encodeToString(jsonArray.toString().getBytes("UTF-8"), Base64.NO_WRAP);
+                                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                bitmap.compress(Bitmap.CompressFormat.PNG, 50, baos); // Compress 50% quality
+                                byte[] iconBytes = baos.toByteArray();
+                                obj.put("iconBase64", Base64.encodeToString(iconBytes, Base64.NO_WRAP));
+                            } catch (Exception ignored) {}
                         }
+
+                        jsonArray.put(obj);
                     }
-                } catch (Exception e) {
-                    Log.e("NEXUS", "Fetch Error", e);
-                    base64Data = Base64.encodeToString("[]".getBytes(), Base64.NO_WRAP);
-                }
+                    base64Data = Base64.encodeToString(jsonArray.toString().getBytes("UTF-8"), Base64.NO_WRAP);
+
+                } catch (Exception e) { Log.e("NEXUS", "Fetch Error", e); }
 
                 final String finalData = base64Data;
                 activity.runOnUiThread(() ->
