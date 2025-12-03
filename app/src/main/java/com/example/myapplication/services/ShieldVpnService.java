@@ -63,15 +63,25 @@ public class ShieldVpnService extends VpnService {
 
     private DnsProfile activeProfile = DnsProfile.CONTROLD_ADS;
 
-    // --- BLOCKLIST ---
+    // --- BLOCKLIST (Telemetry, Beacons, & Background Requests) ---
     private static final Set<String> BLOCKED_KEYWORDS = new HashSet<>(Arrays.asList(
-            // Social / Video / Apps
-            "tiktok", "musical.ly", "byteoversea", "ibytedtos",
+            // --- TikTok / ByteDance Telemetry ---
+            // Blocks logs, monitoring, and background tracking without breaking video playback
+            "log.tiktokv.com", "mon.tiktokv.com", "log-va.tiktokv.com",
+            "ib.tiktokv.com", "toblog.ctobsnssdk.com", "log16-normal-c-useast1a.tiktokv.com",
+            "mssdk.dns.tiktok.com", "ws-log.tiktokv.com", "p16-tiktokcdn-com.akamaized.net",
 
-            // Ads & Trackers
-            "doubleclick", "ads", "analytics", "tracker", "metrics",
+            // --- Mobile Analytics & Crash Reporters ---
+            "app-measurement.com", "firebase-logging", "crashlytics",
+            "segment.io", "adjust.com", "appsflyer", "kochava", "branch.io",
+            "amplitude", "mixpanel", "newrelic", "bugsnag", "sentry.io",
 
-            // Consent Management / Cookie Banners (CMP)
+            // --- Ad Networks & Beacons ---
+            "doubleclick", "googleadservices", "ads", "analytics", "tracker", "metrics",
+            "scorecardresearch", "quantserve", "moatads", "adcolony", "unity3d.ads",
+            "applovin", "vungle", "inmobi", "tapjoy",
+
+            // --- Consent Management (CMP) ---
             "onetrust", "didomi", "quantcast", "cookiebot", "usercentrics",
             "trustarc", "osano", "cookie-script", "termly", "iubenda",
             "civiccomputing", "cookiepro", "cookielaw", "consensu"
@@ -101,7 +111,7 @@ public class ShieldVpnService extends VpnService {
 
         Notification notification = new Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("Nexus Shield Active")
-                .setContentText("Protected by: " + activeProfile.label)
+                .setContentText("Reqs Blocked: " + blockedCount.get()) // Dynamic text
                 .setSmallIcon(R.drawable.ic_launcher_foreground)
                 .addAction(new Notification.Action.Builder(null, "Disconnect", pendingStopIntent).build())
                 .setOngoing(true)
@@ -120,6 +130,27 @@ public class ShieldVpnService extends VpnService {
         }
     }
 
+    private void updateNotification() {
+        // Method to refresh the notification count without re-starting service
+        if (!isRunning.get()) return;
+
+        Intent stopIntent = new Intent(this, ShieldVpnService.class);
+        stopIntent.setAction("STOP");
+        PendingIntent pendingStopIntent = PendingIntent.getService(this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+
+        Notification notification = new Notification.Builder(this, CHANNEL_ID)
+                .setContentTitle("Nexus Shield Active")
+                .setContentText("Reqs Blocked: " + blockedCount.get())
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .addAction(new Notification.Action.Builder(null, "Disconnect", pendingStopIntent).build())
+                .setOngoing(true)
+                .setOnlyAlertOnce(true) // Prevent sound/vibration on update
+                .build();
+
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm != null) nm.notify(1, notification);
+    }
+
     private void startVpn() {
         if (isRunning.get()) return;
 
@@ -132,7 +163,6 @@ public class ShieldVpnService extends VpnService {
         builder.addAddress(VPN_ADDRESS, 32);
 
         // 2. DNS Server: Tell Android to use the REAL public DNS IP
-        // This makes the "DNS PROBE" pass because the IP is valid.
         builder.addDnsServer(activeProfile.ipv4);
 
         // 3. Route: Capture traffic destined for that DNS IP
@@ -203,6 +233,7 @@ public class ShieldVpnService extends VpnService {
                 if (isBlocked(queryDomain)) {
                     Log.d(TAG, "BLOCKING: " + queryDomain);
                     blockedCount.incrementAndGet();
+                    updateNotification(); // Update UI count in notification
                     broadcastStatus(true);
                     return; // Drop packet
                 }

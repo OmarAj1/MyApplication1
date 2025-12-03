@@ -3,7 +3,8 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"
+        tools:ignore="ForegroundServicesPolicy" />
 
     <!-- REQUIRED for Android 14+ "connectedDevice" type -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
@@ -15,6 +16,10 @@
 
     <!-- REQUIRED for Android 13+ to keep the VPN alive -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- CRITICAL: Allows the app to see ALL other apps (TikTok, etc.) on Android 11+ -->
+    <!-- Ignore the warning; this is required for a Debloater/App Manager -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="PackageVisibilityPolicy,QueryAllPackagesPermission" />
 
     <application
         android:allowBackup="true"
@@ -42,7 +47,8 @@
             android:name=".services.ShieldVpnService"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice">
+            android:foregroundServiceType="connectedDevice"
+            tools:ignore="VpnServicePolicy">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>

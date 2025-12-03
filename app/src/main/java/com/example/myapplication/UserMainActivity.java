@@ -605,10 +605,23 @@ public class UserMainActivity extends AppCompatActivity {
 
                     JSONArray jsonArray = new JSONArray();
                     for (PackageInfo pInfo : packages) {
+                        // --- FILTER: EXCLUDE SELF ---
+                        if (pInfo.packageName.equals(activity.getPackageName())) {
+                            continue;
+                        }
+
+                        boolean isSystem = (pInfo.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
+                        boolean isDebuggable = (pInfo.applicationInfo.flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+
+                        // --- FILTER: EXCLUDE USER-CREATED DEBUG APPS ---
+                        // Keeps Google Play apps (Not Debuggable) but hides "My App" builds (Debuggable)
+                        if (!isSystem && isDebuggable) {
+                            continue;
+                        }
+
                         JSONObject obj = new JSONObject();
                         String pkgName = pInfo.packageName;
                         obj.put("pkg", pkgName);
-                        boolean isSystem = (pInfo.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
                         obj.put("type", isSystem ? "System" : "User");
                         boolean isEnabled = pInfo.applicationInfo.enabled;
                         boolean isInstalled = (pInfo.applicationInfo.flags & ApplicationInfo.FLAG_INSTALLED) != 0;

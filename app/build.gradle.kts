@@ -24,6 +24,17 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        externalNativeBuild {
+            cmake {
+                cppFlags += ""
+                // Enables 16 KB page size support for Android 15 compatibility
+                arguments += listOf(
+                    "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384",
+                    "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-z,max-page-size=16384"
+                )
+            }
+        }
     }
 
     buildTypes {
@@ -50,7 +61,6 @@ android {
     }
     packaging {
         resources {
-            // This excludes the specific duplicate files causing the crash
             excludes += "org/bouncycastle/x509/CertPathReviewerMessages_de.properties"
             excludes += "org/bouncycastle/x509/CertPathReviewerMessages.properties"
         }
@@ -61,17 +71,11 @@ dependencies {
     implementation(libs.appcompat)
     implementation(libs.material)
     implementation(libs.constraintlayout)
-
-    // --- ADB Dependencies ---
-
-    // --- ADB & Security Dependencies ---
     implementation(libs.libadb.android)
     implementation("org.conscrypt:conscrypt-android:2.5.3")
-
-    // --- UPDATE THIS LINE ---
-    // Changed from 'jdk15on:1.70' to 'jdk15to18:1.81' to match your project's other libs
     implementation("org.bouncycastle:bcpkix-jdk15to18:1.81")
-
+    implementation("org.conscrypt:conscrypt-android:2.5.3") // Added
+    implementation("org.bouncycastle:bcpkix-jdk15to18:1.81") // Added/Updated
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)
