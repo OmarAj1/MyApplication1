@@ -3,7 +3,7 @@ import {
   Shield, Trash2, Power, Smartphone, Wifi, Zap, Brain, User as UserIcon,
   Target, TrendingUp, DownloadCloud, Filter, Search, AlertTriangle, LogOut,
   Key, ArrowRight, RotateCcw, ClipboardCopy, List, History as HistoryIcon,
-  Layers, Package
+  Layers, Package, Globe, Activity // Added Globe and Activity
 } from 'lucide-react';
 
 const isNative = () => typeof (window as any).AndroidNative !== 'undefined';
@@ -168,6 +168,10 @@ export default function App() {
   const [stateFilter, setStateFilter] = useState('All'); // Enabled, Disabled, Uninstalled
   const [search, setSearch] = useState('');
 
+  // Shield State
+  const [vpnActive, setVpnActive] = useState(false);
+  const [connectionTime, setConnectionTime] = useState(0);
+
   // Connection State
   const [pairIp, setPairIp] = useState('');
   const [pairPort, setPairPort] = useState('');
@@ -181,6 +185,29 @@ export default function App() {
   const [actionType, setActionType] = useState<'uninstall' | 'disable' | 'restore' | 'enable' | null>(null);
   const [isLoadingApps, setIsLoadingApps] = useState(false);
   const [coreVersion, setCoreVersion] = useState("5.1.0-COMPLETE");
+
+  // Shield: Poll status
+  useEffect(() => {
+    const checkStatus = () => {
+      if (isNative() && (window as any).AndroidNative.getVpnStatus) {
+        setVpnActive((window as any).AndroidNative.getVpnStatus());
+      }
+    };
+    checkStatus();
+    const interval = setInterval(checkStatus, 2000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Shield: Connection timer
+  useEffect(() => {
+    let timer: any;
+    if (vpnActive) {
+      timer = setInterval(() => setConnectionTime(prev => prev + 1), 1000);
+    } else {
+      setConnectionTime(0);
+    }
+    return () => clearInterval(timer);
+  }, [vpnActive]);
 
   useEffect(() => {
        (window as any).receiveAppList = (base64Json: string) => {
@@ -232,6 +259,30 @@ export default function App() {
      }
      return () => { if (isNative()) (window as any).AndroidNative.stopMdnsDiscovery(); };
   }, []);
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const toggleVpn = () => {
+    const newState = !vpnActive;
+    setVpnActive(newState);
+
+    if (isNative() && (window as any).AndroidNative.startVpn) {
+      if (newState) {
+        (window as any).AndroidNative.startVpn();
+        showToast("Initializing Shield Protocol...");
+      } else {
+        (window as any).AndroidNative.stopVpn();
+        showToast("Shield Deactivated");
+      }
+    } else {
+        // Fallback for simulation
+        showToast(newState ? "Shield Activated (Simulated)" : "Shield Deactivated");
+    }
+  };
 
   const handleLogin = async () => {
     setIsAuthenticating(true); setAuthError('');
@@ -417,6 +468,67 @@ export default function App() {
       </div>
   );
 
+  const renderShield = () => (
+    <div className="flex flex-col h-full items-center justify-between py-6 animate-in fade-in duration-500">
+
+      {/* Header Status */}
+      <GlassCard className="w-full flex items-center justify-between mb-8" borderColor={vpnActive ? "cyan" : "white"}>
+        <div className="flex items-center space-x-3">
+          <div className={`w-3 h-3 rounded-full ${vpnActive ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+          <span className="text-gray-300 font-mono text-sm">
+            {vpnActive ? 'ENCRYPTED' : 'UNPROTECTED'}
+          </span>
+        </div>
+        <div className="text-cyan-400 font-mono text-sm">
+          {vpnActive ? formatTime(connectionTime) : '--:--'}
+        </div>
+      </GlassCard>
+
+      {/* Main Visual */}
+      <div className="relative flex items-center justify-center w-72 h-72 my-8">
+        <div className={`absolute inset-0 rounded-full transition-all duration-1000 ${vpnActive ? 'bg-cyan-500/10 blur-3xl' : 'bg-transparent'}`} />
+        <div className={`absolute inset-0 rounded-full border-2 border-dashed transition-all duration-1000 ${vpnActive ? 'border-cyan-500/30 animate-[spin_8s_linear_infinite]' : 'border-gray-700'}`} />
+        <div className={`absolute inset-4 rounded-full border border-dashed transition-all duration-1000 ${vpnActive ? 'border-cyan-400/20 animate-[spin_12s_linear_infinite_reverse]' : 'border-gray-800'}`} />
+
+        <div className={`
+          relative z-10 w-40 h-40 rounded-full flex items-center justify-center transition-all duration-500
+          ${vpnActive ? 'bg-gradient-to-b from-cyan-900/50 to-cyan-800/20 shadow-[0_0_50px_rgba(6,182,212,0.3)]' : 'bg-gray-800/50'}
+        `}>
+          <Shield
+            size={80}
+            strokeWidth={1.5}
+            className={`transition-all duration-500 ${vpnActive ? 'text-cyan-400 drop-shadow-[0_0_15px_rgba(6,182,212,0.8)]' : 'text-gray-600'}`}
+          />
+        </div>
+      </div>
+
+      {/* Stats Grid */}
+      <div className="grid grid-cols-2 gap-4 w-full mb-8">
+        <GlassCard className="flex flex-col items-center justify-center py-4 space-y-2">
+          <Globe size={20} className="text-cyan-400" />
+          <span className="text-xs text-gray-500 uppercase tracking-widest">Region</span>
+          <span className="text-gray-200 font-bold">{vpnActive ? 'Nexus-1' : 'Unknown'}</span>
+        </GlassCard>
+        <GlassCard className="flex flex-col items-center justify-center py-4 space-y-2">
+          <Wifi size={20} className="text-cyan-400" />
+          <span className="text-xs text-gray-500 uppercase tracking-widest">Protocol</span>
+          <span className="text-gray-200 font-bold">ADB-SEC</span>
+        </GlassCard>
+      </div>
+
+      {/* Action Button */}
+      <div className="w-full mt-auto">
+        <NeonButton
+          onClick={toggleVpn}
+          active={vpnActive}
+          icon={Power}
+          label={vpnActive ? "DEACTIVATE SHIELD" : "ACTIVATE SHIELD"}
+          color={vpnActive ? "cyan" : "gray"}
+        />
+      </div>
+    </div>
+  );
+
   const renderModal = () => {
     if (!modalOpen || !selectedApp || !actionType) return null;
     const config: any = { uninstall: { color: 'red' }, disable: { color: 'amber' }, enable: { color: 'green' }, restore: { color: 'blue' } };
@@ -441,7 +553,7 @@ export default function App() {
     <div className="bg-[#020617] text-white min-h-screen font-sans select-none">
       <main className="p-6 pb-48">
         {activeTab === 'purge' && (purgeTabState === 'connect' ? renderPurgeConnection() : renderAppManager())}
-        {activeTab === 'shield' && <div className="p-4 text-center text-gray-500">Shield Module Loading...</div>}
+        {activeTab === 'shield' && renderShield()}
         {activeTab === 'history' && renderHistory()}
         {activeTab === 'user' && (
             <div className="space-y-6">

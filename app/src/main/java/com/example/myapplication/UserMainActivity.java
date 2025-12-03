@@ -1,5 +1,6 @@
 package com.example.myapplication;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -11,6 +12,7 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.net.VpnService;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
 import android.os.Build;
@@ -33,9 +35,13 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+
+import com.example.myapplication.services.ShieldVpnService;
 
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.cert.X509CertificateHolder;
@@ -77,6 +83,10 @@ public class UserMainActivity extends AppCompatActivity {
     private ConsolidatedWebAppInterface mInterface;
     private NsdHelper nsdHelper;
 
+    // Request Codes
+    private static final int VPN_REQUEST_CODE = 0x0F;
+    private static final int NOTIFICATION_REQUEST_CODE = 0x10;
+
     public class CommonInterface {
         private final AppCompatActivity mActivity;
         private final Context mContext;
@@ -90,13 +100,17 @@ public class UserMainActivity extends AppCompatActivity {
 
         @JavascriptInterface
         public void hapticFeedback(String type) {
-            Vibrator v = (Vibrator) mContext.getSystemService(Context.VIBRATOR_SERVICE);
-            if (v != null) {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                    v.vibrate(VibrationEffect.createOneShot(20, VibrationEffect.DEFAULT_AMPLITUDE));
-                } else {
-                    v.vibrate(20);
+            try {
+                Vibrator v = (Vibrator) mContext.getSystemService(Context.VIBRATOR_SERVICE);
+                if (v != null) {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        v.vibrate(VibrationEffect.createOneShot(20, VibrationEffect.DEFAULT_AMPLITUDE));
+                    } else {
+                        v.vibrate(20);
+                    }
                 }
+            } catch (Exception e) {
+                Log.e("NEXUS_NATIVE", "Haptic failed: " + e.getMessage());
             }
         }
 
@@ -123,9 +137,56 @@ public class UserMainActivity extends AppCompatActivity {
 
     public class ShieldInterface {
         private final CommonInterface mCommon;
-        public ShieldInterface(AppCompatActivity activity, CommonInterface common) { this.mCommon = common; }
-        @JavascriptInterface public void startVpn() { mCommon.showToast("Shield Activated"); }
-        @JavascriptInterface public void stopVpn() { mCommon.showToast("Shield Deactivated"); }
+        private final AppCompatActivity mActivity;
+
+        public ShieldInterface(AppCompatActivity activity, CommonInterface common) {
+            this.mCommon = common;
+            this.mActivity = activity;
+        }
+
+        @JavascriptInterface
+        public void startVpn() {
+            Intent prepareIntent = VpnService.prepare(mCommon.mContext);
+            if (prepareIntent != null) {
+                if (mActivity instanceof UserMainActivity) {
+                    ((UserMainActivity) mActivity).requestVpnPermission(prepareIntent);
+                }
+            } else {
+                startShieldServiceInternal();
+            }
+        }
+
+        @JavascriptInterface
+        public void stopVpn() {
+            try {
+                Intent intent = new Intent(mCommon.mContext, ShieldVpnService.class);
+                intent.setAction("STOP");
+                mCommon.mContext.startService(intent);
+                mCommon.showToast("Shield Deactivated");
+            } catch (Exception e) {
+                Log.e("NEXUS_VPN", "Error stopping VPN", e);
+            }
+        }
+
+        @JavascriptInterface
+        public boolean getVpnStatus() {
+            return false;
+        }
+
+        public void startShieldServiceInternal() {
+            try {
+                Intent intent = new Intent(mCommon.mContext, ShieldVpnService.class);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    mCommon.mContext.startForegroundService(intent);
+                } else {
+                    mCommon.mContext.startService(intent);
+                }
+                mCommon.showToast("Shield Activated (AdGuard)");
+            } catch (Exception e) {
+                Log.e("NEXUS_VPN", "Failed to start VPN Service. Check Manifest.", e);
+                mCommon.showToast("Core Error: " + e.getMessage());
+            }
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -183,6 +244,41 @@ public class UserMainActivity extends AppCompatActivity {
         });
 
         webView.loadUrl("file:///android_asset/index.html");
+
+        // --- REQUEST NOTIFICATION PERMISSION (Required for VPN Service on Android 13+) ---
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_REQUEST_CODE);
+            }
+        }
+    }
+
+    public void requestVpnPermission(Intent intent) {
+        try {
+            startActivityForResult(intent, VPN_REQUEST_CODE);
+        } catch (Exception e) {
+            Log.e("NEXUS_VPN", "Failed to launch VPN permission dialog", e);
+            Toast.makeText(this, "Error requesting VPN permission", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == VPN_REQUEST_CODE && resultCode == RESULT_OK) {
+            try {
+                Intent intent = new Intent(this, ShieldVpnService.class);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(intent);
+                } else {
+                    startService(intent);
+                }
+                Toast.makeText(this, "Shield Activated (AdGuard)", Toast.LENGTH_SHORT).show();
+            } catch (Exception e) {
+                Log.e("NEXUS_VPN", "Failed to start service from ActivityResult", e);
+                Toast.makeText(this, "Failed to start Shield: Check Logcat", Toast.LENGTH_LONG).show();
+            }
+        }
     }
 
     @Override
@@ -422,6 +518,7 @@ public class UserMainActivity extends AppCompatActivity {
         @JavascriptInterface public void retrieveConnectionInfo() { nsdHelper.retrieveConnectionInfoInternal(); }
         @JavascriptInterface public void startVpn() { shield.startVpn(); }
         @JavascriptInterface public void stopVpn() { shield.stopVpn(); }
+        @JavascriptInterface public boolean getVpnStatus() { return shield.getVpnStatus(); }
 
         private void pairAdbInternal(String ip, String portStr, String code) {
             executor.execute(() -> {
@@ -504,7 +601,6 @@ public class UserMainActivity extends AppCompatActivity {
                 String base64Data = Base64.encodeToString("[]".getBytes(), Base64.NO_WRAP);
                 try {
                     PackageManager pm = activity.getPackageManager();
-                    // Fetch ALL installed packages (System + User) for the device
                     List<PackageInfo> packages = pm.getInstalledPackages(PackageManager.MATCH_UNINSTALLED_PACKAGES);
 
                     JSONArray jsonArray = new JSONArray();
@@ -512,24 +608,18 @@ public class UserMainActivity extends AppCompatActivity {
                         JSONObject obj = new JSONObject();
                         String pkgName = pInfo.packageName;
                         obj.put("pkg", pkgName);
-
-                        // --- CATEGORIZATION LOGIC ---
                         boolean isSystem = (pInfo.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
                         obj.put("type", isSystem ? "System" : "User");
-
-                        // --- STATUS LOGIC ---
                         boolean isEnabled = pInfo.applicationInfo.enabled;
                         boolean isInstalled = (pInfo.applicationInfo.flags & ApplicationInfo.FLAG_INSTALLED) != 0;
 
-                        if (!isInstalled) obj.put("status", "Uninstalled"); // Was uninstalled via pm uninstall -k
+                        if (!isInstalled) obj.put("status", "Uninstalled");
                         else if (isEnabled) obj.put("status", "Enabled");
                         else obj.put("status", "Disabled");
 
                         CharSequence label = pInfo.applicationInfo.loadLabel(pm);
                         obj.put("name", label != null ? label.toString() : pkgName);
 
-                        // --- ICON EXTRACTION (For user apps only to save memory, or all if requested) ---
-                        // Only fetch icons for User apps to keep JSON size manageable, or system if crucial
                         if (!isSystem) {
                             try {
                                 Drawable icon = pInfo.applicationInfo.loadIcon(pm);
@@ -543,7 +633,7 @@ public class UserMainActivity extends AppCompatActivity {
                                     icon.draw(canvas);
                                 }
                                 ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                                bitmap.compress(Bitmap.CompressFormat.PNG, 50, baos); // Compress 50% quality
+                                bitmap.compress(Bitmap.CompressFormat.PNG, 50, baos);
                                 byte[] iconBytes = baos.toByteArray();
                                 obj.put("iconBase64", Base64.encodeToString(iconBytes, Base64.NO_WRAP));
                             } catch (Exception ignored) {}

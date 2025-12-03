@@ -1,25 +1,48 @@
 package com.example.myapplication.interfaces;
 
-import android.util.Log;
+import android.content.Context;
 import android.webkit.JavascriptInterface;
-import androidx.appcompat.app.AppCompatActivity;
+import android.widget.Toast;
 
 public class ShieldInterface {
-    private final CommonInterface mCommon;
+    private Context context;
+    private boolean isVpnRunning = false;
 
-    public ShieldInterface(AppCompatActivity activity, CommonInterface common) {
-        this.mCommon = common;
+    public ShieldInterface(Context context) {
+        this.context = context;
     }
 
+    // This matches window.AndroidNative.startVpn() in App.tsx
     @JavascriptInterface
     public void startVpn() {
-        Log.i("NEXUS_SHIELD", "Attempting to start VPN service...");
-        mCommon.showToast("Shield Activated (Simulated)");
+        // Real VPN service logic would go here
+        isVpnRunning = true;
+
+        // Feedback for debugging
+        System.out.println("NEXUS_CORE: Shield Protocol Initiated");
+    }
+
+    // This matches window.AndroidNative.stopVpn() in App.tsx
+    @JavascriptInterface
+    public void stopVpn() {
+        isVpnRunning = false;
+        System.out.println("NEXUS_CORE: Shield Protocol Terminated");
+    }
+
+    // This matches window.AndroidNative.getVpnStatus()
+    @JavascriptInterface
+    public boolean getVpnStatus() {
+        return isVpnRunning;
     }
 
     @JavascriptInterface
-    public void stopVpn() {
-        Log.i("NEXUS_SHIELD", "Attempting to stop VPN service...");
-        mCommon.showToast("Shield Deactivated (Simulated)");
+    public void showToast(String message) {
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show();
+    }
+
+    @JavascriptInterface
+    public void hapticFeedback(String type) {
+        // Simple haptic implementation
+        // You can add Vibrator logic here if desired
     }
 }
