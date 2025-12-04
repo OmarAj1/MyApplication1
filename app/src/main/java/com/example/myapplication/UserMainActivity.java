@@ -44,7 +44,6 @@ import androidx.core.view.WindowInsetsCompat;
 import com.example.myapplication.services.ShieldVpnService;
 
 import org.bouncycastle.asn1.x500.X500Name;
-import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
@@ -54,7 +53,11 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.math.BigInteger;
+import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
@@ -62,6 +65,8 @@ import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.Security;
 import java.security.cert.Certificate;
+import java.security.cert.CertificateFactory;
+import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.Date;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -82,56 +87,41 @@ public class UserMainActivity extends AppCompatActivity {
 
     private ConsolidatedWebAppInterface mInterface;
     private NsdHelper nsdHelper;
-
-    // Request Codes
     private static final int VPN_REQUEST_CODE = 0x0F;
     private static final int NOTIFICATION_REQUEST_CODE = 0x10;
 
+    // --- INTERFACES ---
+
     public class CommonInterface {
-        private final AppCompatActivity mActivity;
         private final Context mContext;
+        public CommonInterface(Context context) { this.mContext = context; }
 
-        public CommonInterface(AppCompatActivity activity) {
-            this.mActivity = activity;
-            this.mContext = activity.getApplicationContext();
-        }
-
-        @JavascriptInterface public String getNativeCoreVersion() { return "5.1.2-STABLE"; }
+        @JavascriptInterface public String getNativeCoreVersion() { return "5.1.3-STABLE"; }
 
         @JavascriptInterface
         public void hapticFeedback(String type) {
             try {
                 Vibrator v = (Vibrator) mContext.getSystemService(Context.VIBRATOR_SERVICE);
-                if (v != null) {
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                        v.vibrate(VibrationEffect.createOneShot(20, VibrationEffect.DEFAULT_AMPLITUDE));
-                    } else {
-                        v.vibrate(20);
-                    }
-                }
-            } catch (Exception e) {
-                Log.e("NEXUS_NATIVE", "Haptic failed: " + e.getMessage());
-            }
+                if (v != null) v.vibrate(VibrationEffect.createOneShot(20, VibrationEffect.DEFAULT_AMPLITUDE));
+            } catch (Exception e) {}
         }
 
         @JavascriptInterface
         public void showToast(String toast) {
-            if (mActivity != null && !mActivity.isFinishing()) {
-                mActivity.runOnUiThread(() -> Toast.makeText(mContext, toast, Toast.LENGTH_SHORT).show());
-            }
+            // Use Handler to ensure toast runs on UI thread even if activity is weird
+            new Handler(Looper.getMainLooper()).post(() ->
+                    Toast.makeText(mContext, toast, Toast.LENGTH_SHORT).show()
+            );
         }
 
         @JavascriptInterface
         public void shareText(String title, String content) {
-            mActivity.runOnUiThread(() -> {
-                Intent shareIntent = new Intent(Intent.ACTION_SEND);
-                shareIntent.setType("text/plain");
-                shareIntent.putExtra(Intent.EXTRA_SUBJECT, title);
-                shareIntent.putExtra(Intent.EXTRA_TEXT, content);
-                Intent chooser = Intent.createChooser(shareIntent, title);
-                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                mContext.startActivity(chooser);
-            });
+            Intent shareIntent = new Intent(Intent.ACTION_SEND);
+            shareIntent.setType("text/plain");
+            shareIntent.putExtra(Intent.EXTRA_SUBJECT, title);
+            shareIntent.putExtra(Intent.EXTRA_TEXT, content);
+            shareIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            mContext.startActivity(Intent.createChooser(shareIntent, title).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         }
     }
 
@@ -148,9 +138,7 @@ public class UserMainActivity extends AppCompatActivity {
         public void startVpn() {
             Intent prepareIntent = VpnService.prepare(mCommon.mContext);
             if (prepareIntent != null) {
-                if (mActivity instanceof UserMainActivity) {
-                    ((UserMainActivity) mActivity).requestVpnPermission(prepareIntent);
-                }
+                mActivity.startActivityForResult(prepareIntent, VPN_REQUEST_CODE);
             } else {
                 startShieldServiceInternal();
             }
@@ -163,31 +151,22 @@ public class UserMainActivity extends AppCompatActivity {
                 intent.setAction("STOP");
                 mCommon.mContext.startService(intent);
                 mCommon.showToast("Shield Deactivated");
-            } catch (Exception e) {
-                Log.e("NEXUS_VPN", "Error stopping VPN", e);
-            }
+            } catch (Exception e) {}
         }
 
-        @JavascriptInterface
-        public boolean getVpnStatus() {
-            return false;
-        }
+        @JavascriptInterface public boolean getVpnStatus() { return false; }
 
         public void startShieldServiceInternal() {
             try {
                 Intent intent = new Intent(mCommon.mContext, ShieldVpnService.class);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    mCommon.mContext.startForegroundService(intent);
-                } else {
-                    mCommon.mContext.startService(intent);
-                }
-                mCommon.showToast("Shield Activated (AdGuard)");
-            } catch (Exception e) {
-                Log.e("NEXUS_VPN", "Failed to start VPN Service. Check Manifest.", e);
-                mCommon.showToast("Core Error: " + e.getMessage());
-            }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) mCommon.mContext.startForegroundService(intent);
+                else mCommon.mContext.startService(intent);
+                mCommon.showToast("Shield Activated");
+            } catch (Exception e) { mCommon.showToast("VPN Error: " + e.getMessage()); }
         }
     }
+
+    // --- LIFECYCLE ---
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -199,9 +178,9 @@ public class UserMainActivity extends AppCompatActivity {
         webView = findViewById(R.id.webview);
         loader = findViewById(R.id.loader);
 
-        if (webView == null || loader == null) return;
+        // Fix background color flicker
+        webView.setBackgroundColor(0xFF020617);
 
-        webView.setBackgroundColor(0x00000000);
         ViewCompat.setOnApplyWindowInsetsListener(webView, (v, windowInsets) -> {
             androidx.core.graphics.Insets insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars());
             v.setPadding(insets.left, 0, insets.right, insets.bottom);
@@ -213,7 +192,9 @@ public class UserMainActivity extends AppCompatActivity {
         webSettings.setDomStorageEnabled(true);
         webSettings.setAllowFileAccess(true);
 
-        AdbSingleton.getInstance().init(this);
+        // INITIALIZE ADB SINGLETON
+        AdbSingleton.getInstance().init(getApplicationContext());
+
         nsdHelper = new NsdHelper(this);
         mInterface = new ConsolidatedWebAppInterface(this, executor, webView, nsdHelper);
         webView.addJavascriptInterface(mInterface, "AndroidNative");
@@ -223,9 +204,9 @@ public class UserMainActivity extends AppCompatActivity {
             public void onPageFinished(WebView view, String url) {
                 mainHandler.postDelayed(() -> {
                     if (loader != null) loader.setVisibility(View.GONE);
-                    view.setAlpha(0f);
-                    view.animate().alpha(1.0f).setDuration(500).start();
+                    view.setAlpha(1.0f);
 
+                    // Check connection status on load
                     MyAdbManager manager = AdbSingleton.getInstance().getManager();
                     if (manager != null && manager.isConnected()) {
                         webView.evaluateJavascript("window.adbStatus('Connected');", null);
@@ -235,17 +216,9 @@ public class UserMainActivity extends AppCompatActivity {
             }
         });
 
-        webView.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public boolean onConsoleMessage(ConsoleMessage cm) {
-                Log.d("NEXUS_WEB", cm.message() + " -- From line " + cm.lineNumber());
-                return true;
-            }
-        });
+        // Use the new folder path
+        webView.loadUrl("file:///android_asset/web/index.html");
 
-        webView.loadUrl("file:///android_asset/index.html");
-
-        // --- REQUEST NOTIFICATION PERMISSION (Required for VPN Service on Android 13+) ---
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_REQUEST_CODE);
@@ -253,52 +226,19 @@ public class UserMainActivity extends AppCompatActivity {
         }
     }
 
-    public void requestVpnPermission(Intent intent) {
-        try {
-            startActivityForResult(intent, VPN_REQUEST_CODE);
-        } catch (Exception e) {
-            Log.e("NEXUS_VPN", "Failed to launch VPN permission dialog", e);
-            Toast.makeText(this, "Error requesting VPN permission", Toast.LENGTH_SHORT).show();
-        }
-    }
-
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == VPN_REQUEST_CODE && resultCode == RESULT_OK) {
-            try {
-                Intent intent = new Intent(this, ShieldVpnService.class);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    startForegroundService(intent);
-                } else {
-                    startService(intent);
-                }
-                Toast.makeText(this, "Shield Activated (AdGuard)", Toast.LENGTH_SHORT).show();
-            } catch (Exception e) {
-                Log.e("NEXUS_VPN", "Failed to start service from ActivityResult", e);
-                Toast.makeText(this, "Failed to start Shield: Check Logcat", Toast.LENGTH_LONG).show();
-            }
+            mInterface.shield.startShieldServiceInternal();
         }
     }
 
-    @Override
-    protected void onResume() {
-        super.onResume();
-        if (nsdHelper != null) nsdHelper.startMdnsDiscoveryInternal();
-    }
+    @Override protected void onResume() { super.onResume(); if (nsdHelper != null) nsdHelper.startMdnsDiscoveryInternal(); }
+    @Override protected void onPause() { super.onPause(); if (nsdHelper != null) nsdHelper.stopMdnsDiscoveryInternal(); }
+    @Override protected void onDestroy() { super.onDestroy(); if (nsdHelper != null) nsdHelper.stopMdnsDiscoveryInternal(); }
 
-    @Override
-    protected void onPause() {
-        super.onPause();
-        if (nsdHelper != null) nsdHelper.stopMdnsDiscoveryInternal();
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        if (executor != null) executor.shutdownNow();
-        if (nsdHelper != null) nsdHelper.stopMdnsDiscoveryInternal();
-    }
+    // --- ADB MANAGER (NOW WITH PERSISTENCE) ---
 
     public static class AdbSingleton {
         private static AdbSingleton instance;
@@ -317,7 +257,8 @@ public class UserMainActivity extends AppCompatActivity {
                 try {
                     Security.removeProvider("BC");
                     Security.addProvider(new BouncyCastleProvider());
-                    adbManager = new MyAdbManager();
+                    // Pass context to constructor
+                    adbManager = new MyAdbManager(context);
                 } catch (Exception e) {
                     Log.e("NEXUS", "Failed to init ADB", e);
                 } finally {
@@ -332,18 +273,43 @@ public class UserMainActivity extends AppCompatActivity {
     public static class MyAdbManager extends AbsAdbConnectionManager {
         private PrivateKey mPrivateKey;
         private Certificate mCertificate;
+        private final File keyFile;
+        private final File certFile;
 
-        public MyAdbManager() throws Exception {
+        public MyAdbManager(Context context) throws Exception {
+            // Set up persistent files
+            keyFile = new File(context.getFilesDir(), "adb_key.pk8");
+            certFile = new File(context.getFilesDir(), "adb_key.pem");
             setApi(Build.VERSION.SDK_INT);
-            generateKeys();
+
+            // Load existing or generate new
+            if (keyFile.exists() && certFile.exists()) {
+                try { loadKeys(); }
+                catch (Exception e) { generateAndSaveKeys(); }
+            } else {
+                generateAndSaveKeys();
+            }
         }
 
-        private void generateKeys() throws Exception {
+        private void loadKeys() throws Exception {
+            byte[] keyBytes = new byte[(int) keyFile.length()];
+            try (FileInputStream fis = new FileInputStream(keyFile)) { fis.read(keyBytes); }
+            KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+            mPrivateKey = keyFactory.generatePrivate(new PKCS8EncodedKeySpec(keyBytes));
+
+            try (FileInputStream fis = new FileInputStream(certFile)) {
+                CertificateFactory certFactory = CertificateFactory.getInstance("X.509");
+                mCertificate = certFactory.generateCertificate(fis);
+            }
+        }
+
+        private void generateAndSaveKeys() throws Exception {
             KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
             keyGen.initialize(2048, new SecureRandom());
             KeyPair pair = keyGen.generateKeyPair();
             mPrivateKey = pair.getPrivate();
             PublicKey publicKey = pair.getPublic();
+
             X500Name issuer = new X500Name("CN=NexusADB");
             JcaX509v3CertificateBuilder certBuilder = new JcaX509v3CertificateBuilder(
                     issuer, BigInteger.valueOf(Math.abs(System.currentTimeMillis())),
@@ -353,6 +319,9 @@ public class UserMainActivity extends AppCompatActivity {
             );
             ContentSigner signer = new JcaContentSignerBuilder("SHA256WithRSA").setProvider(new BouncyCastleProvider()).build(mPrivateKey);
             mCertificate = new JcaX509CertificateConverter().setProvider(new BouncyCastleProvider()).getCertificate(certBuilder.build(signer));
+
+            try (FileOutputStream fos = new FileOutputStream(keyFile)) { fos.write(mPrivateKey.getEncoded()); }
+            try (FileOutputStream fos = new FileOutputStream(certFile)) { fos.write(mCertificate.getEncoded()); }
         }
 
         @NonNull @Override protected PrivateKey getPrivateKey() { return mPrivateKey; }
@@ -366,24 +335,18 @@ public class UserMainActivity extends AppCompatActivity {
                 byte[] buffer = new byte[8192];
                 long startTime = System.currentTimeMillis();
                 final long TIMEOUT = 40000;
-
                 while (!stream.isClosed()) {
                     if (System.currentTimeMillis() - startTime > TIMEOUT) break;
-                    try {
-                        int bytesRead = stream.read(buffer, 0, buffer.length);
-                        if (bytesRead > 0) {
-                            outputStream.write(buffer, 0, bytesRead);
-                            startTime = System.currentTimeMillis();
-                        } else if (bytesRead < 0) {
-                            break;
-                        }
-                        Thread.sleep(5);
-                    } catch (Exception e) { break; }
+                    int bytesRead = stream.read(buffer, 0, buffer.length);
+                    if (bytesRead > 0) { outputStream.write(buffer, 0, bytesRead); startTime = System.currentTimeMillis(); }
+                    else if (bytesRead < 0) break;
                 }
                 return outputStream.toString("UTF-8");
             }
         }
     }
+
+    // --- HELPERS (NSD & INTERFACE) ---
 
     private class NsdHelper {
         private NsdManager nsdManager;
@@ -399,7 +362,6 @@ public class UserMainActivity extends AppCompatActivity {
         }
 
         private void sendToJs(String func, String ip, int port) {
-            if (activity.isFinishing() || activity.isDestroyed()) return;
             activity.runOnUiThread(() -> webView.evaluateJavascript(
                     String.format("if(window.%s) window.%s('%s', '%d');", func, func, ip, port), null));
         }
@@ -431,10 +393,9 @@ public class UserMainActivity extends AppCompatActivity {
                 }
                 @Override public void onServiceLost(NsdServiceInfo s) {}
                 @Override public void onDiscoveryStopped(String t) {}
-                @Override public void onStartDiscoveryFailed(String t, int e) { stopMdnsDiscoveryInternal(); }
-                @Override public void onStopDiscoveryFailed(String t, int e) { stopMdnsDiscoveryInternal(); }
+                @Override public void onStartDiscoveryFailed(String t, int e) {}
+                @Override public void onStopDiscoveryFailed(String t, int e) {}
             };
-
             connectListener = new NsdManager.DiscoveryListener() {
                 @Override public void onDiscoveryStarted(String t) {}
                 @Override public void onServiceFound(NsdServiceInfo s) {
@@ -451,8 +412,8 @@ public class UserMainActivity extends AppCompatActivity {
                 }
                 @Override public void onServiceLost(NsdServiceInfo s) {}
                 @Override public void onDiscoveryStopped(String t) {}
-                @Override public void onStartDiscoveryFailed(String t, int e) { stopMdnsDiscoveryInternal(); }
-                @Override public void onStopDiscoveryFailed(String t, int e) { stopMdnsDiscoveryInternal(); }
+                @Override public void onStartDiscoveryFailed(String t, int e) {}
+                @Override public void onStopDiscoveryFailed(String t, int e) {}
             };
         }
 
@@ -462,23 +423,12 @@ public class UserMainActivity extends AppCompatActivity {
                     if (pairingListener != null) nsdManager.stopServiceDiscovery(pairingListener);
                     if (connectListener != null) nsdManager.stopServiceDiscovery(connectListener);
                 }
-            } catch (Exception e) {}
-            finally { isDiscoveryActive = false; }
+            } catch (Exception e) {} finally { isDiscoveryActive = false; }
         }
 
         public void retrieveConnectionInfoInternal() {
             if (autoPairIp != null) sendToJs("onPairingServiceFound", autoPairIp, autoPairPort);
             if (autoConnectIp != null) sendToJs("onConnectServiceFound", autoConnectIp, autoConnectPort);
-            activity.runOnUiThread(() -> {
-                try {
-                    ClipboardManager cb = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
-                    if (cb != null && cb.hasPrimaryClip() && cb.getPrimaryClip().getItemCount() > 0) {
-                        CharSequence text = cb.getPrimaryClip().getItemAt(0).getText();
-                        Matcher m = Pattern.compile("(\\d{1,3}(?:\\.\\d{1,3}){3}):(\\d{4,5})").matcher(text);
-                        if (m.find()) sendToJs("onPairingServiceFound", m.group(1), Integer.parseInt(m.group(2)));
-                    }
-                } catch (Exception e) {}
-            });
         }
 
         public String getAutoPairIp() { return autoPairIp; }
@@ -489,7 +439,7 @@ public class UserMainActivity extends AppCompatActivity {
 
     public class ConsolidatedWebAppInterface {
         public final CommonInterface common;
-        private final ShieldInterface shield;
+        public final ShieldInterface shield;
         private final AppCompatActivity activity;
         private final ExecutorService executor;
         private final NsdHelper nsdHelper;
@@ -500,10 +450,11 @@ public class UserMainActivity extends AppCompatActivity {
             this.executor = executor;
             this.webView = webView;
             this.nsdHelper = nsdHelper;
-            this.common = new CommonInterface(activity);
+            this.common = new CommonInterface(activity.getApplicationContext());
             this.shield = new ShieldInterface(activity, common);
         }
 
+        // Bridge methods
         @JavascriptInterface public String getNativeCoreVersion() { return common.getNativeCoreVersion(); }
         @JavascriptInterface public void hapticFeedback(String type) { common.hapticFeedback(type); }
         @JavascriptInterface public void showToast(String toast) { common.showToast(toast); }
@@ -529,6 +480,7 @@ public class UserMainActivity extends AppCompatActivity {
                     int targetPort = -1;
                     try { targetPort = Integer.parseInt(portStr); } catch (Exception e) { targetPort = nsdHelper.getAutoPairPort(); }
                     if (targetIp == null || targetPort == -1) { common.showToast("Missing Pairing Info"); return; }
+
                     boolean success = manager.pair(targetIp, targetPort, code);
                     common.showToast(success ? "Pairing Success!" : "Pairing Failed. Check Code.");
                 } catch (Exception e) { common.showToast("Pair Error: " + e.getMessage()); }
@@ -544,10 +496,9 @@ public class UserMainActivity extends AppCompatActivity {
                     if (targetIp == null) targetIp = nsdHelper.getAutoPairIp();
                     int targetPort = -1;
                     try { targetPort = Integer.parseInt(portStr); } catch (Exception e) { targetPort = nsdHelper.getAutoConnectPort(); }
-                    if (targetPort == -1) targetPort = nsdHelper.getAutoPairPort();
 
                     if (targetIp == null || targetPort == -1) { common.showToast("Connection Info Missing"); return; }
-
+                    common.showToast("Attempting: " + targetIp + ":" + targetPort);
                     boolean connected = manager.connect(targetIp, targetPort);
                     if (connected) {
                         common.showToast("Connected to Shell");
@@ -558,6 +509,7 @@ public class UserMainActivity extends AppCompatActivity {
                     }
                 } catch (Exception e) {
                     common.showToast("Connect Error: " + e.getMessage());
+                    Log.e("NEXUS_DEBUG", "Connection Failed", e); // Log full stack trace
                     activity.runOnUiThread(() -> webView.evaluateJavascript("window.adbStatus('Connect Error');", null));
                 }
             });
@@ -602,66 +554,22 @@ public class UserMainActivity extends AppCompatActivity {
                 try {
                     PackageManager pm = activity.getPackageManager();
                     List<PackageInfo> packages = pm.getInstalledPackages(PackageManager.MATCH_UNINSTALLED_PACKAGES);
-
                     JSONArray jsonArray = new JSONArray();
                     for (PackageInfo pInfo : packages) {
-                        // --- FILTER: EXCLUDE SELF ---
-                        if (pInfo.packageName.equals(activity.getPackageName())) {
-                            continue;
-                        }
-
+                        if (pInfo.packageName.equals(activity.getPackageName())) continue;
                         boolean isSystem = (pInfo.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
-                        boolean isDebuggable = (pInfo.applicationInfo.flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
-
-                        // --- FILTER: EXCLUDE USER-CREATED DEBUG APPS ---
-                        // Keeps Google Play apps (Not Debuggable) but hides "My App" builds (Debuggable)
-                        if (!isSystem && isDebuggable) {
-                            continue;
-                        }
-
                         JSONObject obj = new JSONObject();
-                        String pkgName = pInfo.packageName;
-                        obj.put("pkg", pkgName);
+                        obj.put("pkg", pInfo.packageName);
                         obj.put("type", isSystem ? "System" : "User");
-                        boolean isEnabled = pInfo.applicationInfo.enabled;
-                        boolean isInstalled = (pInfo.applicationInfo.flags & ApplicationInfo.FLAG_INSTALLED) != 0;
-
-                        if (!isInstalled) obj.put("status", "Uninstalled");
-                        else if (isEnabled) obj.put("status", "Enabled");
-                        else obj.put("status", "Disabled");
-
+                        obj.put("status", pInfo.applicationInfo.enabled ? "Enabled" : "Disabled");
                         CharSequence label = pInfo.applicationInfo.loadLabel(pm);
-                        obj.put("name", label != null ? label.toString() : pkgName);
-
-                        if (!isSystem) {
-                            try {
-                                Drawable icon = pInfo.applicationInfo.loadIcon(pm);
-                                Bitmap bitmap;
-                                if (icon instanceof BitmapDrawable) {
-                                    bitmap = ((BitmapDrawable) icon).getBitmap();
-                                } else {
-                                    bitmap = Bitmap.createBitmap(icon.getIntrinsicWidth(), icon.getIntrinsicHeight(), Bitmap.Config.ARGB_8888);
-                                    Canvas canvas = new Canvas(bitmap);
-                                    icon.setBounds(0, 0, canvas.getWidth(), canvas.getHeight());
-                                    icon.draw(canvas);
-                                }
-                                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                                bitmap.compress(Bitmap.CompressFormat.PNG, 50, baos);
-                                byte[] iconBytes = baos.toByteArray();
-                                obj.put("iconBase64", Base64.encodeToString(iconBytes, Base64.NO_WRAP));
-                            } catch (Exception ignored) {}
-                        }
-
+                        obj.put("name", label != null ? label.toString() : pInfo.packageName);
                         jsonArray.put(obj);
                     }
                     base64Data = Base64.encodeToString(jsonArray.toString().getBytes("UTF-8"), Base64.NO_WRAP);
-
-                } catch (Exception e) { Log.e("NEXUS", "Fetch Error", e); }
-
+                } catch (Exception e) {}
                 final String finalData = base64Data;
-                activity.runOnUiThread(() ->
-                        webView.evaluateJavascript("if(window.receiveAppList) window.receiveAppList('" + finalData + "');", null)
-                );
+                activity.runOnUiThread(() -> webView.evaluateJavascript("if(window.receiveAppList) window.receiveAppList('" + finalData + "');", null));
             });
         }
     }

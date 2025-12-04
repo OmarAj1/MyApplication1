@@ -6,16 +6,16 @@ plugins {
 android {
     namespace = "com.example.myapplication"
     compileSdk = 36
-    // Add this inside the 'android' block in app/build.gradle.kts
-        tasks.register("buildReactApp", Exec::class) {
-            workingDir = file("src/main/assets")
-            // Use 'npm.cmd' on Windows, 'npm' on Mac/Linux
-            commandLine(if (System.getProperty("os.name").toLowerCase().contains("windows")) "npm.cmd" else "npm", "run", "build")
-        }
 
-        tasks.named("preBuild") {
-            dependsOn("buildReactApp")
-        }
+    tasks.register("buildReactApp", Exec::class) {
+        workingDir = rootProject.file("nexus-web")
+        commandLine(if (System.getProperty("os.name").toLowerCase().contains("windows")) "npm.cmd" else "npm", "run", "build")
+    }
+
+    tasks.named("preBuild") {
+        dependsOn("buildReactApp")
+    }
+
     defaultConfig {
         applicationId = "com.example.myapplication"
         minSdk = 26
@@ -28,7 +28,6 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags += ""
-                // Enables 16 KB page size support for Android 15 compatibility
                 arguments += listOf(
                     "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384",
                     "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-z,max-page-size=16384"
@@ -74,8 +73,6 @@ dependencies {
     implementation(libs.libadb.android)
     implementation("org.conscrypt:conscrypt-android:2.5.3")
     implementation("org.bouncycastle:bcpkix-jdk15to18:1.81")
-    implementation("org.conscrypt:conscrypt-android:2.5.3") // Added
-    implementation("org.bouncycastle:bcpkix-jdk15to18:1.81") // Added/Updated
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)

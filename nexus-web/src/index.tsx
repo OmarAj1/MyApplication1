@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
-
+import './index.css';
 // This is the entry point of the React application.
 // It finds the 'root' div in index.html and renders the <App /> component into it.
 
