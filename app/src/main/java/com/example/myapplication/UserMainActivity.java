@@ -7,10 +7,6 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
-import android.graphics.Bitmap;
-import android.graphics.Canvas;
-import android.graphics.drawable.BitmapDrawable;
-import android.graphics.drawable.Drawable;
 import android.net.VpnService;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
@@ -169,6 +165,8 @@ public class UserMainActivity extends AppCompatActivity {
 
         webView = findViewById(R.id.webview);
         loader = findViewById(R.id.loader);
+//        webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+
         webView.setBackgroundColor(0xFF020617);
 
         ViewCompat.setOnApplyWindowInsetsListener(webView, (v, windowInsets) -> {

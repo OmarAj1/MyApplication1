@@ -12,6 +12,7 @@ import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
 import com.example.myapplication.R;
+import com.example.myapplication.UserMainActivity;
 
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -19,7 +20,6 @@ import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
-import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
@@ -41,6 +41,7 @@ public class ShieldVpnService extends VpnService {
     private final AtomicLong blockedCount = new AtomicLong(0);
 
     private ParcelFileDescriptor vpnInterface;
+    private FileOutputStream vpnOutput; // Critical: Single output stream
     private ExecutorService dnsThreadPool;
 
     // Internal Virtual IP for the VPN Interface
@@ -61,27 +62,27 @@ public class ShieldVpnService extends VpnService {
         }
     }
 
+    // Default to ControlD as requested
     private DnsProfile activeProfile = DnsProfile.CONTROLD_ADS;
 
-    // --- BLOCKLIST (Telemetry, Beacons, & Background Requests) ---
+    // --- BLOCKLIST (Full List) ---
     private static final Set<String> BLOCKED_KEYWORDS = new HashSet<>(Arrays.asList(
-            // --- TikTok / ByteDance Telemetry ---
-            // Blocks logs, monitoring, and background tracking without breaking video playback
+            // --- TikTok / ByteDance ---
             "log.tiktokv.com", "mon.tiktokv.com", "log-va.tiktokv.com",
             "ib.tiktokv.com", "toblog.ctobsnssdk.com", "log16-normal-c-useast1a.tiktokv.com",
             "mssdk.dns.tiktok.com", "ws-log.tiktokv.com", "p16-tiktokcdn-com.akamaized.net",
 
-            // --- Mobile Analytics & Crash Reporters ---
+            // --- Analytics & Crash Reporting ---
             "app-measurement.com", "firebase-logging", "crashlytics",
             "segment.io", "adjust.com", "appsflyer", "kochava", "branch.io",
             "amplitude", "mixpanel", "newrelic", "bugsnag", "sentry.io",
 
-            // --- Ad Networks & Beacons ---
+            // --- Ad Networks ---
             "doubleclick", "googleadservices", "ads", "analytics", "tracker", "metrics",
             "scorecardresearch", "quantserve", "moatads", "adcolony", "unity3d.ads",
             "applovin", "vungle", "inmobi", "tapjoy",
 
-            // --- Consent Management (CMP) ---
+            // --- Consent Management ---
             "onetrust", "didomi", "quantcast", "cookiebot", "usercentrics",
             "trustarc", "osano", "cookie-script", "termly", "iubenda",
             "civiccomputing", "cookiepro", "cookielaw", "consensu"
@@ -98,6 +99,7 @@ public class ShieldVpnService extends VpnService {
             dnsThreadPool = Executors.newFixedThreadPool(50);
         }
 
+        // Start Foreground Notification IMMEDIATELY
         startForegroundServiceNotification();
         startVpn();
         return START_STICKY;
@@ -105,24 +107,30 @@ public class ShieldVpnService extends VpnService {
 
     private void startForegroundServiceNotification() {
         createNotificationChannel();
+        Intent intent = new Intent(this, UserMainActivity.class);
+        PendingIntent pi = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE);
+
         Intent stopIntent = new Intent(this, ShieldVpnService.class);
         stopIntent.setAction("STOP");
         PendingIntent pendingStopIntent = PendingIntent.getService(this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
-        Notification notification = new Notification.Builder(this, CHANNEL_ID)
+        Notification.Builder builder = new Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("Nexus Shield Active")
-                .setContentText("Reqs Blocked: " + blockedCount.get()) // Dynamic text
+                .setContentText("Reqs Blocked: " + blockedCount.get())
                 .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentIntent(pi)
                 .addAction(new Notification.Action.Builder(null, "Disconnect", pendingStopIntent).build())
                 .setOngoing(true)
-                .setCategory(Notification.CATEGORY_SERVICE)
-                .build();
+                .setCategory(Notification.CATEGORY_SERVICE);
 
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+            if (Build.VERSION.SDK_INT >= 34) {
+                // FIXED: Must match Manifest "specialUse"
+                startForeground(1, builder.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            } else if (Build.VERSION.SDK_INT >= 29) {
+                startForeground(1, builder.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
             } else {
-                startForeground(1, notification);
+                startForeground(1, builder.build());
             }
         } catch (Exception e) {
             Log.e(TAG, "Start foreground failed", e);
@@ -131,24 +139,19 @@ public class ShieldVpnService extends VpnService {
     }
 
     private void updateNotification() {
-        // Method to refresh the notification count without re-starting service
         if (!isRunning.get()) return;
-
-        Intent stopIntent = new Intent(this, ShieldVpnService.class);
-        stopIntent.setAction("STOP");
-        PendingIntent pendingStopIntent = PendingIntent.getService(this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-
-        Notification notification = new Notification.Builder(this, CHANNEL_ID)
-                .setContentTitle("Nexus Shield Active")
-                .setContentText("Reqs Blocked: " + blockedCount.get())
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
-                .addAction(new Notification.Action.Builder(null, "Disconnect", pendingStopIntent).build())
-                .setOngoing(true)
-                .setOnlyAlertOnce(true) // Prevent sound/vibration on update
-                .build();
-
+        // Simplified update logic to avoid creating new intents constantly
         NotificationManager nm = getSystemService(NotificationManager.class);
-        if (nm != null) nm.notify(1, notification);
+        if (nm != null) {
+            // We reuse the basic builder params. In production, you'd cache the builder.
+            Notification.Builder builder = new Notification.Builder(this, CHANNEL_ID)
+                    .setContentTitle("Nexus Shield Active")
+                    .setContentText("Reqs Blocked: " + blockedCount.get())
+                    .setSmallIcon(R.drawable.ic_launcher_foreground)
+                    .setOngoing(true)
+                    .setOnlyAlertOnce(true);
+            nm.notify(1, builder.build());
+        }
     }
 
     private void startVpn() {
@@ -162,10 +165,12 @@ public class ShieldVpnService extends VpnService {
         // 1. Configure Interface
         builder.addAddress(VPN_ADDRESS, 32);
 
-        // 2. DNS Server: Tell Android to use the REAL public DNS IP
+        // 2. Routing Strategy
+        // We set the DNS to the active profile (e.g. 76.76.2.2)
+        // And we route THAT specific IP into the tunnel.
+        // This ensures normal internet traffic bypasses the VPN (faster speed),
+        // but DNS requests are captured by us.
         builder.addDnsServer(activeProfile.ipv4);
-
-        // 3. Route: Capture traffic destined for that DNS IP
         try {
             builder.addRoute(activeProfile.ipv4, 32);
         } catch (Exception e) {
@@ -181,11 +186,14 @@ public class ShieldVpnService extends VpnService {
                 return;
             }
 
+            // CRITICAL FIX: Initialize Output Stream ONCE here.
+            // Opening it for every packet causes "Stream Closed" or "File Busy" errors.
+            vpnOutput = new FileOutputStream(vpnInterface.getFileDescriptor());
+
             isRunning.set(true);
             blockedCount.set(0);
             broadcastStatus(true);
 
-            // Start the Traffic Processor
             new Thread(this::listenForPackets).start();
 
         } catch (Exception e) {
@@ -203,7 +211,9 @@ public class ShieldVpnService extends VpnService {
                 int length = in.read(buffer);
                 if (length > 0) {
                     byte[] packetData = Arrays.copyOf(buffer, length);
-                    dnsThreadPool.execute(() -> processPacket(packetData));
+                    if (dnsThreadPool != null && !dnsThreadPool.isShutdown()) {
+                        dnsThreadPool.execute(() -> processPacket(packetData));
+                    }
                 }
             }
         } catch (Exception e) {
@@ -215,30 +225,27 @@ public class ShieldVpnService extends VpnService {
 
     private void processPacket(byte[] packetData) {
         try {
-            // Basic IPv4/UDP Check
-            byte version = (byte) ((packetData[0] >> 4) & 0x0F);
-            byte protocol = packetData[9];
+            // IPv4 (Version=4) and UDP (Protocol=17)
+            if (((packetData[0] >> 4) & 0x0F) != 4 || packetData[9] != 17) return;
 
-            if (version != 4 || protocol != 17) return;
-
-            int ipHeaderLength = (packetData[0] & 0x0F) * 4;
-            int dstPort = ((packetData[ipHeaderLength + 2] & 0xFF) << 8) | (packetData[ipHeaderLength + 3] & 0xFF);
+            int ipHeaderLen = (packetData[0] & 0x0F) * 4;
+            int dstPort = ((packetData[ipHeaderLen + 2] & 0xFF) << 8) | (packetData[ipHeaderLen + 3] & 0xFF);
 
             if (dstPort == 53) {
-                int udpHeaderLength = 8;
-                int dnsStart = ipHeaderLength + udpHeaderLength;
+                int udpHeaderLen = 8;
+                int dnsStart = ipHeaderLen + udpHeaderLen;
 
                 String queryDomain = extractDomain(packetData, dnsStart, packetData.length);
 
                 if (isBlocked(queryDomain)) {
                     Log.d(TAG, "BLOCKING: " + queryDomain);
                     blockedCount.incrementAndGet();
-                    updateNotification(); // Update UI count in notification
+                    updateNotification();
                     broadcastStatus(true);
-                    return; // Drop packet
+                    return; // Drop packet (Ad Blocked)
                 }
 
-                forwardDnsQuery(packetData, ipHeaderLength, dnsStart, packetData.length);
+                forwardDnsQuery(packetData, ipHeaderLen, dnsStart, packetData.length);
             }
         } catch (Exception e) {
             Log.e(TAG, "Process packet error", e);
@@ -249,10 +256,11 @@ public class ShieldVpnService extends VpnService {
         DatagramSocket tunnelSocket = null;
         try {
             tunnelSocket = new DatagramSocket();
+            // CRITICAL: Protect socket to bypass VPN and avoid infinite loop
             if (!protect(tunnelSocket)) {
                 throw new IOException("Socket protection failed");
             }
-            tunnelSocket.setSoTimeout(2000);
+            tunnelSocket.setSoTimeout(2500); // 2.5s Timeout
 
             byte[] dnsPayload = Arrays.copyOfRange(originalPacket, dnsStart, totalLength);
             InetAddress server = InetAddress.getByName(activeProfile.ipv4);
@@ -266,8 +274,8 @@ public class ShieldVpnService extends VpnService {
             // Construct Response
             byte[] rawResponse = buildResponsePacket(originalPacket, totalLength, respPacket.getData(), respPacket.getLength());
 
-            FileOutputStream out = new FileOutputStream(vpnInterface.getFileDescriptor());
-            out.write(rawResponse);
+            // CRITICAL FIX: Use the synchronized write method
+            writeToVpn(rawResponse);
 
         } catch (Exception e) {
             // Log.w(TAG, "DNS Forward failed: " + e.getMessage());
@@ -276,7 +284,19 @@ public class ShieldVpnService extends VpnService {
         }
     }
 
-    // --- HELPER METHODS (Same as before but critical for function) ---
+    // CRITICAL FIX: Synchronized writing to prevent packet corruption
+    private synchronized void writeToVpn(byte[] packet) {
+        try {
+            if (vpnOutput != null && isRunning.get()) {
+                vpnOutput.write(packet);
+            }
+        } catch (IOException e) {
+            Log.e(TAG, "Error writing to VPN interface", e);
+        }
+    }
+
+    // --- HELPER METHODS ---
+
     private boolean isBlocked(String domain) {
         if (domain == null) return false;
         String clean = domain.toLowerCase();
@@ -292,51 +312,60 @@ public class ShieldVpnService extends VpnService {
 
         byte[] response = new byte[totalLen];
 
+        // 1. Copy IP Header
         System.arraycopy(original, 0, response, 0, ipHeaderLen);
-        System.arraycopy(original, 16, response, 12, 4);
-        System.arraycopy(original, 12, response, 16, 4);
 
+        // 2. Fix IP Length
         response[2] = (byte) (totalLen >> 8);
         response[3] = (byte) (totalLen & 0xFF);
 
+        // 3. Swap Src/Dst IP Addresses
+        System.arraycopy(original, 16, response, 12, 4);
+        System.arraycopy(original, 12, response, 16, 4);
+
+        // 4. Calculate IP Checksum (must zero it first)
         response[10] = 0;
         response[11] = 0;
         int ipChecksum = calculateChecksum(response, 0, ipHeaderLen);
         response[10] = (byte) (ipChecksum >> 8);
         response[11] = (byte) (ipChecksum & 0xFF);
 
-        response[ipHeaderLen] = original[ipHeaderLen + 2];
+        // 5. Swap UDP Ports
+        response[ipHeaderLen] = original[ipHeaderLen + 2]; // Dest port becomes Src port
         response[ipHeaderLen + 1] = original[ipHeaderLen + 3];
-        response[ipHeaderLen + 2] = original[ipHeaderLen];
+        response[ipHeaderLen + 2] = original[ipHeaderLen]; // Src port becomes Dest port
         response[ipHeaderLen + 3] = original[ipHeaderLen + 1];
 
+        // 6. Fix UDP Length
         int udpLen = 8 + dnsLen;
         response[ipHeaderLen + 4] = (byte) (udpLen >> 8);
         response[ipHeaderLen + 5] = (byte) (udpLen & 0xFF);
-        response[ipHeaderLen + 6] = 0;
+        response[ipHeaderLen + 6] = 0; // UDP Checksum is optional (0)
         response[ipHeaderLen + 7] = 0;
 
+        // 7. Copy DNS Data
         System.arraycopy(dnsData, 0, response, ipHeaderLen + 8, dnsLen);
 
         return response;
     }
 
+    // CRITICAL FIX: Standard Internet Checksum Algorithm
+    // The previous version had bugs that caused the OS to reject packets.
     private int calculateChecksum(byte[] buf, int offset, int length) {
         int sum = 0;
         for (int i = 0; i < length; i += 2) {
-            int word = ((buf[offset + i] & 0xFF) << 8) | (buf[offset + i + 1] & 0xFF);
+            int word = ((buf[offset + i] & 0xFF) << 8) | ((i + 1 < length) ? (buf[offset + i + 1] & 0xFF) : 0);
             sum += word;
-            if ((sum & 0xFFFF0000) != 0) {
-                sum &= 0xFFFF;
-                sum++;
-            }
+        }
+        while ((sum >> 16) > 0) {
+            sum = (sum & 0xFFFF) + (sum >> 16);
         }
         return ~sum & 0xFFFF;
     }
 
     private String extractDomain(byte[] data, int offset, int max) {
         try {
-            int pos = offset + 12;
+            int pos = offset + 12; // Skip DNS Header (12 bytes)
             StringBuilder sb = new StringBuilder();
             while (pos < max) {
                 int len = data[pos] & 0xFF;
@@ -362,6 +391,12 @@ public class ShieldVpnService extends VpnService {
         if (dnsThreadPool != null) {
             dnsThreadPool.shutdownNow();
             dnsThreadPool = null;
+        }
+
+        // Close output stream safely
+        if (vpnOutput != null) {
+            try { vpnOutput.close(); } catch (IOException ignored) {}
+            vpnOutput = null;
         }
 
         if (vpnInterface != null) {

@@ -21,31 +21,16 @@ export const ConnectionView = ({
   const [port, setPort] = useState('');
   const [code, setCode] = useState('');
 
-  // 2. AUTO-FILL: When data comes from Android, fill the inputs
-//   useEffect(() => {
-//       if (pairingData.ip) {
-//           setIp(pairingData.ip);
-//           setPort(pairingData.port);
-//       } else if (connectData.ip) {
-//           setIp(connectData.ip);
-//           setPort(connectData.port);
-//       }
-//   }, [pairingData, connectData]);
-// Listen for ANY data change and update the inputs immediately
   useEffect(() => {
-      // 1. If we have a valid Connection Port, ALWAYS use it (Priority #1)
-      if (connectData && connectData.port && connectData.port !== "" && connectData.port !== "0") {
-          console.log("Auto-filling Connection Port:", connectData.port);
+      if (pairingData.ip) {
+          setIp(pairingData.ip);
+          setPort(pairingData.port);
+      } else if (connectData.ip) {
           setIp(connectData.ip);
           setPort(connectData.port);
       }
-      // 2. Otherwise, if we have Pairing data AND we haven't typed anything yet, use that
-      else if (pairingData && pairingData.port && (port === '' || port === '0')) {
-          console.log("Auto-filling Pairing Port:", pairingData.port);
-          setIp(pairingData.ip);
-          setPort(pairingData.port);
-      }
-  }, [connectData, pairingData]); // Remove 'port' dependency to allow manual edits
+  }, [pairingData, connectData]);
+
   return (
     <div className="flex flex-col h-full justify-center space-y-6 animate-in fade-in duration-500">
       <GlassCard className="space-y-4" borderColor="cyan">
