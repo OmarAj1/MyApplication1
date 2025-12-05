@@ -69,7 +69,7 @@ public class AdbPairingManager {
         executor.execute(() -> {
             // FIX: Removed "UserMainActivity." prefix
             AdbSingleton singleton = AdbSingleton.getInstance();
-            MyAdbManager manager = singleton.getManager();
+            MyAdbManager manager = singleton.getAdbManager();
 
             if (manager == null) {
                 notifyPairResult(false, "Core initializing... Try again.");
@@ -127,7 +127,7 @@ public class AdbPairingManager {
         executor.execute(() -> {
             // FIX: Removed "UserMainActivity." prefix
             AdbSingleton singleton = AdbSingleton.getInstance();
-            MyAdbManager manager = singleton.getManager();
+            MyAdbManager manager = singleton.getAdbManager();
 
             if (manager == null) {
                 notifyConnectResult(false, "Core initializing... Try again.");

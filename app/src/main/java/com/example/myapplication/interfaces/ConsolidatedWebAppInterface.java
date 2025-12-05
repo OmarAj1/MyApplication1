@@ -64,7 +64,7 @@ public class ConsolidatedWebAppInterface {
 
     private void executeCommandInternal(String action, String pkg, int userId) {
         executor.execute(() -> {
-            MyAdbManager manager = AdbSingleton.getInstance().getManager();
+            MyAdbManager manager = AdbSingleton.getInstance().getAdbManager();
             if (manager == null || !manager.isConnected()) { common.showToast("Not Connected"); return; }
             try {
                 String cmd = "";
@@ -93,7 +93,7 @@ public class ConsolidatedWebAppInterface {
     private void fetchUsersInternal() {
         executor.execute(() -> {
             try {
-                MyAdbManager manager = AdbSingleton.getInstance().getManager();
+                MyAdbManager manager = AdbSingleton.getInstance().getAdbManager();
                 if (manager != null && manager.isConnected()) {
                     String raw = manager.runShellCommand("pm list users");
                     String b64 = Base64.encodeToString(raw.getBytes(), Base64.NO_WRAP);

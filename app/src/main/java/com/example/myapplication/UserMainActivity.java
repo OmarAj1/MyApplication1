@@ -16,6 +16,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.ProgressBar;
+import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
@@ -30,8 +31,11 @@ import com.example.myapplication.managers.AdbPairingManager;
 import com.example.myapplication.managers.AdbSingleton;
 import com.example.myapplication.managers.MyAdbManager;
 
+import java.security.Security;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 
 public class UserMainActivity extends AppCompatActivity implements AdbPairingListener {
 
@@ -51,6 +55,18 @@ public class UserMainActivity extends AppCompatActivity implements AdbPairingLis
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // --- CRITICAL FIX: Fix BouncyCastle Provider for Android P+ ---
+        // Android's internal "BC" provider is deprecated/restricted. We must remove it
+        // and register our own full BouncyCastle implementation to generate ADB keys successfully.
+        try {
+            Security.removeProvider("BC");
+            Security.addProvider(new BouncyCastleProvider());
+        } catch (Exception e) {
+            Log.e("NEXUS", "Error setting up Security Provider", e);
+        }
+        // -------------------------------------------------------------
+
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setContentView(R.layout.activity_main);
 
@@ -59,10 +75,24 @@ public class UserMainActivity extends AppCompatActivity implements AdbPairingLis
 
         setupWebViewUI();
 
-        // 1. Init ADB Singleton
-        AdbSingleton.getInstance().init(getApplicationContext());
+        // 1. Init ADB Singleton with Callback
+        // We pass 'this' context, and handle the completion in the callback
+        AdbSingleton.getInstance().init(getApplicationContext(), new AdbSingleton.AdbInitListener() {
+            @Override
+            public void onInitComplete() {
+                // This might run on a background thread, so we post to Main Thread for any UI updates
+                mainHandler.post(() -> {
+                    Log.d("NEXUS", "ADB Initialization Sequence Complete");
+                    // Optional: If you needed to enable buttons or notify the webview immediately
+                    if (webView != null) {
+                        webView.evaluateJavascript("console.log('ADB Native Init Complete');", null);
+                    }
+                });
+            }
+        });
 
         // 2. Init Managers
+        // Note: Ensure pairingManager doesn't require the internal 'adbManager' immediately in its constructor
         pairingManager = new AdbPairingManager(this, this);
 
         // 3. Init Web Interface (Pass dependencies)
@@ -78,7 +108,9 @@ public class UserMainActivity extends AppCompatActivity implements AdbPairingLis
                     view.setAlpha(1.0f);
 
                     // Check initial connection state
-                    MyAdbManager manager = AdbSingleton.getInstance().getManager();
+                    // Updated to use .getAdbManager() to match the Singleton definition
+                    MyAdbManager manager = AdbSingleton.getInstance().getAdbManager();
+
                     if (manager != null && manager.isConnected()) {
                         webView.evaluateJavascript("window.adbStatus('Connected');", null);
                         mInterface.getInstalledPackages();
@@ -138,26 +170,43 @@ public class UserMainActivity extends AppCompatActivity implements AdbPairingLis
 
     @Override
     public void onPairingServiceFound(String ip, int port) {
-        webView.evaluateJavascript(String.format("if(window.onPairingServiceFound) window.onPairingServiceFound('%s', '%d');", ip, port), null);
+        // Run on UI Thread to ensure WebView thread safety
+        runOnUiThread(() -> {
+            webView.evaluateJavascript(String.format("if(window.onPairingServiceFound) window.onPairingServiceFound('%s', '%d');", ip, port), null);
+        });
     }
 
     @Override
     public void onConnectServiceFound(String ip, int port) {
-        webView.evaluateJavascript(String.format("if(window.onConnectServiceFound) window.onConnectServiceFound('%s', '%d');", ip, port), null);
+        // Run on UI Thread to ensure WebView thread safety
+        runOnUiThread(() -> {
+            webView.evaluateJavascript(String.format("if(window.onConnectServiceFound) window.onConnectServiceFound('%s', '%d');", ip, port), null);
+        });
     }
 
     @Override
     public void onPairingResult(boolean success, String message) {
-        mInterface.common.showToast(message);
+        // Run on UI Thread to prevent "Toast already killed" and threading errors
+        runOnUiThread(() -> {
+            if (mInterface != null && mInterface.common != null) {
+                mInterface.common.showToast(message);
+            }
+        });
     }
 
     @Override
     public void onConnectionResult(boolean success, String message) {
-        mInterface.common.showToast(message);
-        if (success) {
-            webView.evaluateJavascript("window.adbStatus('Connected');", null);
-        } else if (message.contains("Connection Failed")) {
-            webView.evaluateJavascript("window.adbStatus('Connection Failed');", null);
-        }
+        // Run on UI Thread to prevent "Toast already killed" and threading errors
+        runOnUiThread(() -> {
+            if (mInterface != null && mInterface.common != null) {
+                mInterface.common.showToast(message);
+            }
+
+            if (success) {
+                webView.evaluateJavascript("window.adbStatus('Connected');", null);
+            } else if (message != null && message.contains("Connection Failed")) {
+                webView.evaluateJavascript("window.adbStatus('Connection Failed');", null);
+            }
+        });
     }
 }

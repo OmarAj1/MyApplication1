@@ -8,9 +8,14 @@ export const useNativeBridge = () => {
   const [vpnActive, setVpnActive] = useState(false);
   const [history, setHistory] = useState<ActionLog[]>([]);
 
-  // 1. NEW STATE: Store the data we get back from Android
+  // These update the UI text fields
   const [pairingData, setPairingData] = useState({ ip: '', port: '' });
   const [connectData, setConnectData] = useState({ ip: '', port: '' });
+
+  // --- NEW: THE CONSTANT MEMORY ---
+  // This stores the "Main" Wireless Debugging IP/Port permanently once found.
+  // It will NOT be overwritten by the pairing port.
+  const [mainEndpoint, setMainEndpoint] = useState<{ ip: string, port: string } | null>(null);
 
   const isNative = () => typeof (window as any).AndroidNative !== 'undefined';
 
@@ -18,15 +23,25 @@ export const useNativeBridge = () => {
     pair: (ip: string, port: string, code: string) => {
         if (isNative()) (window as any).AndroidNative.pairAdb(ip, port, code);
     },
-    connect: (ip: string, port: string) => {
-        setStatus("Connecting...");
-        if (isNative()) (window as any).AndroidNative.connectAdb(ip, port);
+
+    // --- UPDATED CONNECT LOGIC ---
+    connect: (uiIp: string, uiPort: string) => {
+        // SMART CONNECT:
+        // If we have a saved "Main" endpoint (from Retrieve IP), use that.
+        // This effectively ignores the Pairing Port currently sitting in the input fields.
+        const finalIp = mainEndpoint ? mainEndpoint.ip : uiIp;
+        const finalPort = mainEndpoint ? mainEndpoint.port : uiPort;
+
+        setStatus(`Connecting to Main Port: ${finalPort}...`);
+
+        if (isNative()) {
+            (window as any).AndroidNative.connectAdb(finalIp, finalPort);
+        }
     },
+
     disconnect: () => {
          setStatus("Disconnected");
-         // Add disconnect logic if needed
     },
-    // 2. NEW ACTION: Call the Android function
     retrieve: () => {
         if (isNative()) (window as any).AndroidNative.retrieveConnectionInfo();
     },
@@ -61,19 +76,29 @@ export const useNativeBridge = () => {
         } catch(e) { console.error(e); }
     };
 
-    // 3. LISTENERS: When Android replies, update our state
+    // --- PAIRING FOUND ---
+    // Just updates the UI fields for the user to click "Pair"
     (window as any).onPairingServiceFound = (ip: string, port: any) => {
         setPairingData({ ip, port: port.toString() });
         setStatus('Pairing Info Found');
     };
+
+    // --- CONNECT (MAIN) FOUND ---
+    // This is the Golden Source. We save this to 'mainEndpoint'.
     (window as any).onConnectServiceFound = (ip: string, port: any) => {
-        setConnectData({ ip, port: port.toString() });
+        const portStr = port.toString();
+
+        // 1. Update UI
+        setConnectData({ ip, port: portStr });
+
+        // 2. LOCK IT IN MEMORY
+        setMainEndpoint({ ip, port: portStr });
+
         setStatus('Ready to Connect');
     };
 
     return () => clearInterval(interval);
   }, []);
 
-  // 4. EXPORT: Pass the data out to the app
   return { apps, users, status, vpnActive, history, actions, pairingData, connectData };
 };

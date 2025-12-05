@@ -21,11 +21,24 @@ export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [username, setUsername] = useState('admin');
 
+  // Hook into the native Android bridge
   const {
         apps, users, status, vpnActive, history, actions,
-        pairingData, connectData // <--- Get the new data
+        pairingData, connectData
     } = useNativeBridge();
 
+  // --- NEW: Action Handler to fix "Dead Buttons" ---
+  const handleAppAction = (action: string, pkg: string, userId: number) => {
+      // Calls the native bridge function exposed in useNativeBridge
+      // This sends the command (uninstall/disable) to the Java layer
+      if ((window as any).AndroidNative) {
+          (window as any).AndroidNative.executeCommand(action, pkg, userId);
+      } else {
+          console.warn("Native bridge not found. Action:", action, pkg);
+      }
+  };
+
+  // Dynamic Theme Logic
   const theme = useMemo<ThemeConfig>(() => {
     if (!isLoggedIn) return {
         accentColor: '#06b6d4',
@@ -66,7 +79,6 @@ export default function App() {
             status={status}
             onPair={actions.pair}
             onConnect={actions.connect}
-            // PASS THE NEW PROPS DOWN:
             onRetrieve={actions.retrieve}
             pairingData={pairingData}
             connectData={connectData}
@@ -74,7 +86,14 @@ export default function App() {
         );
       }
 
-      return <PurgeView allApps={apps} users={users} onDisconnect={actions.disconnect} />;
+      return (
+        <PurgeView
+            allApps={apps}
+            users={users}
+            onDisconnect={actions.disconnect}
+            onAction={handleAppAction} // <--- Critical Fix: Passing the handler
+        />
+      );
     };
 
   return (
